@@ -65,8 +65,6 @@ live-or-leave-team/
 └── README.md
 ```
 
-> **참고**: `app/agents/`, `app/api/`, `app/tools/`, `app/repositories/`, `app/core/`는 이전 아키텍처 실험 단계에서 만든 코드로, 현재 `app/main.py`가 실제로 서비스하는 MVP 흐름에는 연결되어 있지 않습니다. 혼동을 피하려면 위 구조 기준으로 코드를 보면 됩니다.
-
 ## 데이터 처리 흐름
 
 ```
@@ -157,6 +155,18 @@ final_score = (
 | `food` | 햄버거, 버거, 맥도날드, 롯데리아, 버거킹, 맘스터치, KFC |
 | `lifestyle` | 20대, 대학생, 사회초년생, 카페, 놀거리, 상권 |
 
+## 설치
+
+의존성(FastAPI, pandas 등)은 가상환경(`.venv`)에만 설치되어 있습니다. 아래 명령을 먼저 실행해 활성화하세요.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+> venv를 활성화하지 않고 `pytest`, `uvicorn` 명령을 바로 실행하면 시스템 기본 python이 잡혀 `ModuleNotFoundError: No module named 'fastapi'` 또는 `command not found: uvicorn`이 발생합니다. 항상 `source .venv/bin/activate`를 먼저 실행하세요.
+
 ## API 사용법
 
 ### 서버 실행
@@ -235,19 +245,24 @@ Response 예시:
 
 ## 테스트 방법
 
+`.venv`를 활성화한 상태에서 실행합니다 (`source .venv/bin/activate`).
+
 ```bash
 pytest
-```
-
-또는:
-
-```bash
-uv run pytest
 ```
 
 특정 테스트 파일만 실행:
 
 ```bash
+pytest tests/test_recommendation.py -v
+```
+
+> 프로젝트 루트의 `pytest.ini`(`pythonpath = .`)가 `app` 모듈을 찾도록 경로를 설정해줍니다. 이 파일이 없으면 `ModuleNotFoundError: No module named 'app'`이 발생합니다.
+
+`uv`를 사용하는 경우 (uv가 `.venv`를 자동으로 인식합니다):
+
+```bash
+uv run pytest
 uv run pytest tests/test_recommendation.py -v
 ```
 
