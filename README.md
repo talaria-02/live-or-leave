@@ -1,204 +1,288 @@
-# 살래말래 (Live or Leave) — 개인 성향 맞춤 동네 추천 서비스
+# 살래말래 (Live or Leave) — 서울시 개인화 주거 지역 추천 MVP
 
-자연어로 입력한 개인 성향을 분석해, 서울시 25개 자치구 중 가장 잘 맞는 동네를 추천하는 데이터 기반 추천 서비스입니다. 공공데이터로 구축한 동별 삶의 질 지표에 LLM의 자연어 이해를 결합했습니다.
+사용자의 자연어 라이프스타일 조건을 바탕으로 서울 25개 자치구 중 적합한 주거 후보 지역을 추천하는 MVP입니다.
 
-> 예: "야근이 잦고 차가 없는데, 밤에 안전하고 지하철이 가까운 동네를 찾고 있어요"
-> → 성향을 가중치·제약 조건으로 변환 → 지표 기반 스코어링 → 근거와 함께 추천
+오늘 MVP의 핵심 시나리오는 다음입니다.
 
-## 핵심 아이디어
+> 나는 러닝을 좋아하는 20대 남자야. 근처에 공원과 햄버거집이 많은 동네를 추천해줘.
 
-동네 추천은 본질적으로 **여러 지표를 개인 가중치로 종합해 순위를 매기는 문제**입니다. 이 프로젝트는 계산의 정확성과 자연어의 유연성을 분리해 설계했습니다.
+이 질의에서 시스템은 아래 선호를 추출해 점수 계산에 반영합니다.
 
-- 계산(정규화·스코어링·정렬·필터)은 **백엔드에서 결정론적으로** 처리해 정확하고 재현 가능하게 합니다.
-- LLM은 규칙으로 대체할 수 없는 **입구(자연어 → 구조화된 의도)** 와 **출구(순위 → 근거 있는 설명)** 에서만 사용합니다.
-
-## 아키텍처
-
-전체 시스템은 오프라인 데이터 파이프라인과 온라인 런타임 두 부분으로 구성됩니다.
-
-### 1. 데이터 파이프라인 (오프라인 배치)
-
-원시 공공데이터를 하나의 동별 지표 테이블로 통합하는 단계입니다. LLM은 사용되지 않습니다.
-
-```
-공공데이터
-  ├─ [초기 적재] 파일 다운로드 (CSV/GeoJSON)   ← 기본 경로
-  └─ [주기 갱신] Open API 수집                 ← 변동 데이터만
-        ↓
-  수집 소스 표준화 (좌표·행정동 코드 정제, 동일 스키마로 변환)
-  → 공간조인 (행정동 경계로 매핑)
-  → 동별 집계 (개수·밀도·거리 계산)
-  → 정규화 (0~1 · 분위수 변환)
-  → 동별 지표 테이블 (PostgreSQL)
-```
-
-핵심은 좌표 기반 데이터(CCTV·상가·정류장 등)를 **행정동 경계로 공간조인(spatial join)** 해서 동 단위로 집계하는 것입니다. 이 지표 테이블이 모든 추천의 데이터 소스가 됩니다.
-
-#### 데이터 확보 전략 — 파일 초기적재 + 선택적 API 갱신
-
-수집 방식을 데이터 성격에 따라 이원화했습니다.
-
-- **초기 적재는 파일 다운로드(CSV/GeoJSON)로.** 지표 대부분(CCTV·상가·지하철역·공원·인구 등)은 위치 기반 정적 데이터라 자주 바뀌지 않습니다. 파일로 받으면 API 인증·트래픽 제한·페이지네이션 처리 없이 빠르게 적재할 수 있고, 로컬에 고정돼 결과가 재현 가능합니다.
-- **주기 갱신은 변동성 있는 데이터에만 Open API로.** 매달 신고가 쌓이는 **실거래가**, 수시로 갱신되는 **대기질** 정도에만 API 갱신을 적용합니다. 정적 위치 데이터까지 주기 갱신하는 것은 과설계이므로 제외합니다.
-
-파일 적재 경로와 API 갱신 경로는 **표준화 이후 단계를 완전히 공유**합니다. 두 경로 모두 동일한 표준 스키마로 변환된 뒤 같은 공간조인·집계·정규화 과정을 거치므로, 갱신 소스 추가가 "새 파이프라인 제작"이 아니라 "입력 소스 하나 더 연결"로 끝납니다.
-
-### 2. 런타임 (온라인)
-
-```
-사용자 자연어 입력
-  → [입구 LLM] 의도 파싱: 가중치 + 필터 추출 (모호하면 되묻기)
-  → [백엔드] 결정론적 계산: 정규화·스코어링·정렬·필터
-  → [출구 LLM] 결과 설명: 순위를 근거 있는 자연어 추천으로 변환
-  → 대시보드 · 지도 시각화
-```
-
-- **입구 LLM**: 자연어 성향을 구조화된 질의(카테고리별 가중치 + 하드 필터)로 변환합니다. 정보가 부족하면 되묻기로 한 번 정제합니다.
-- **백엔드**: 산수·정렬·필터를 전부 코드로 처리합니다. LLM이 개입하지 않아 빠르고 예측 가능합니다.
-- **출구 LLM**: 백엔드가 뽑은 숫자 순위를 받아 "왜 이 동네인지" 기여도 분해와 함께 자연어로 설명합니다.
-
-## 추천 알고리즘
-
-### 지표 정규화
-
-지표마다 단위·스케일이 다르므로 0~1로 정규화하고, 방향을 구분합니다.
-
-- 높을수록 좋은 지표(편의시설 수, 공원 면적): `score = (value - min) / (max - min)`
-- 낮을수록 좋은 지표(사고 건수, 미세먼지): `score = 1 - (value - min) / (max - min)`
-- 이상치에 강건하게: 값의 백분위 순위 기반 정규화 사용
-- 밀도 지표는 절대 개수가 아닌 **면적·인구 대비**로 환산해 규모 편향 제거
-
-### 카테고리 스코어링
-
-개별 지표를 5개 상위 카테고리로 묶고, 사용자는 카테고리 가중치만 조절합니다.
-
-| 카테고리 | 구성 지표 예시 |
+| 키워드 | 매핑되는 점수 |
 |---|---|
-| 안전 | 교통사고율, CCTV 밀도, 범죄 통계 |
-| 편의 | 편의점·마트·병원 밀도, 접근성 |
-| 이동 | 대중교통 밀도, 지하철역 거리 |
-| 환경 | 미세먼지, 공원·녹지 접근성 |
-| 주거비 | 아파트·오피스텔 실거래가 |
+| 러닝 | `running_score` |
+| 공원 | `park_score` |
+| 햄버거집 | `food_score` |
+| 20대 생활 인프라 | `lifestyle_score` |
 
-최종 점수: `동_점수 = Σ (가중치[c] × 동_카테고리점수[c])`
+추천 단위는 **서울 25개 자치구**입니다 (행정동 단위는 오늘 범위 밖).
 
-### 접근성 계산
+## 현재 구현된 MVP 범위
 
-시설 접근성은 단순 최단거리 대신 거리 감쇠(decay)를 적용합니다.
+### 오늘 범위
 
-```
-접근성 = exp(-거리_km / 0.5)   # 0.5km 기준척도, 가까울수록 1
-```
+- 서울 25개 자치구 단위 추천
+- 공원 / 러닝 / 햄버거집 / 생활 인프라 중심 점수화
+- 규칙 기반 자연어 키워드 추출 (LLM 미사용)
+- 결정론적 점수 계산 (동일 입력 → 항상 동일 출력)
+- FastAPI `POST /recommend` API
+- pytest 기반 핵심 시나리오 테스트 ([tests/test_recommendation.py](tests/test_recommendation.py))
 
-## 데이터셋
+### 오늘 제외한 범위 (추후 확장 대상)
 
-대상 지역: **서울시 (자치구 25개 단위 집계)**. 서울열린데이터광장을 주 출처로 삼아 포맷 통일성을 확보하고, 실거래가 등 일부만 공공데이터포털을 사용합니다.
-
-확보 방식은 초기 적재(파일)를 기본으로 하며, 변동성 있는 데이터만 주기 갱신(API)을 함께 사용합니다.
-
-| 카테고리 | 데이터셋 | 출처 | 확보 방식 |
-|---|---|---|---|
-| 안전 | 방범 CCTV, 교통사고 통계, 5대 범죄 통계 | 서울열린데이터광장, 도로교통공단 | 파일 |
-| 편의 | 상가업소 정보, 병·의원·약국 | 소상공인시장진흥공단, 건강보험심사평가원 | 파일 |
-| 이동 | 버스정류장, 지하철역, 주차장 | 서울열린데이터광장 | 파일 |
-| 환경 | 공원·녹지 | 서울열린데이터광장 | 파일 |
-| 환경 | 대기질 측정 | 에어코리아 | 파일 + API 갱신 |
-| 주거비·성향 | 인구·세대 통계 | 행정안전부 | 파일 |
-| 주거비·성향 | 부동산 실거래가 | 국토교통부 | 파일 + API 갱신 |
-| 기반 | 행정동 경계(GeoJSON), 행정동 코드 | 행정안전부 | 파일 |
-
-## 기술 스택
-
-| 영역 | 기술 |
-|---|---|
-| 데이터 파이프라인 | Python, pandas, geopandas, shapely |
-| 데이터베이스 | PostgreSQL + PostGIS |
-| 백엔드 | FastAPI |
-| LLM | Upstage Solar (LiteLLM 경유) |
-| 프런트엔드 / 시각화 | 지도 대시보드 (Leaflet 또는 Streamlit) |
-| 관찰가능성 | LLM 입출구 호출 로깅 (Langfuse) |
+- 행정동 단위 추천
+- 좌표 기반 거리 계산
+- 지도 히트맵 시각화
+- 실시간 매물 연동
+- 주거비 / 교통 / 안전 점수 반영
+- LLM 기반 복잡한 ReAct Agent
+- Text-to-SQL
+- 장기 사용자 선호 기억
 
 ## 프로젝트 구조
 
 ```
-live-or-leave/
-├── pipeline/              # 오프라인 데이터 파이프라인
-│   ├── loaders/           # 수집 소스별 모듈 (표준 스키마로 변환)
-│   │   ├── file_loader.py #   초기 적재: CSV/GeoJSON 파일
-│   │   └── api_updater.py #   주기 갱신: 실거래가·대기질 Open API
-│   ├── standardize.py     # 좌표·행정동 코드 정제
-│   ├── spatial_join.py    # 행정동 경계 공간조인
-│   ├── aggregate.py       # 동별 지표 집계
-│   └── normalize.py       # 정규화·지표 테이블 생성
-├── backend/               # 온라인 런타임
-│   ├── main.py            # FastAPI 엔트리포인트
-│   ├── intent_parser.py   # 입구 LLM: 자연어 → 가중치·필터
-│   ├── scorer.py          # 백엔드: 결정론적 스코어링·정렬
-│   └── explainer.py       # 출구 LLM: 순위 → 근거 설명
-├── frontend/              # 대시보드·지도 시각화
-├── data/                  # 원시·중간 데이터 (다운로드한 파일 포함)
+live-or-leave-team/
+├── app/
+│   ├── main.py                        # FastAPI 앱, GET / , POST /recommend
+│   ├── schemas/
+│   │   └── recommendation.py          # 요청/응답 Pydantic 모델
+│   ├── services/
+│   │   ├── recommendation_service.py  # 선호 추출·가중치·Top3 계산
+│   │   └── score_adapter.py           # region_features.csv → region_scores.csv 변환
+│   └── data_pipeline/
+│       └── build_region_features.py   # 원천/Mock 데이터 → region_features.csv 생성
+├── docs/
+│   ├── data_inventory.md              # 원천 데이터 목록 및 출처
+│   ├── feature_schema.md              # feature 컬럼별 정의·Mock 여부
+│   └── mock_policy.md                 # Mock/파생 feature 정책
+├── processed/
+│   ├── region_features.csv            # 자치구별 원천 feature 테이블
+│   └── region_scores.csv              # 추천 로직이 사용하는 최종 점수 테이블
+├── tests/
+│   └── test_recommendation.py         # 핵심 시나리오 API 테스트
+├── requirements.txt
 └── README.md
 ```
 
-## 설정 및 실행
+> **참고**: `app/agents/`, `app/api/`, `app/tools/`, `app/repositories/`, `app/core/`는 이전 아키텍처 실험 단계에서 만든 코드로, 현재 `app/main.py`가 실제로 서비스하는 MVP 흐름에는 연결되어 있지 않습니다. 혼동을 피하려면 위 구조 기준으로 코드를 보면 됩니다.
 
-### 사전 요구사항
+## 데이터 처리 흐름
 
-- Python 3.10+
-- PostgreSQL 14+ (PostGIS 확장 — Docker 이미지 `postgis/postgis` 권장)
-- 다운로드한 공공데이터 파일 (초기 적재용)
-- 공공데이터포털 API 키 (실거래가·대기질 갱신용, 선택)
-- Upstage API 키 (Solar 모델 접근용)
-
-### 설치
-
-```bash
-git clone <repository-url>
-cd live-or-leave
-pip install -r requirements.txt
-
-# 환경 변수 설정
-cp .env.example .env
-# .env 파일에 API 키·DB 접속 정보 입력
+```
+수집 데이터 / 현실성 있는 Mock 데이터
+        ↓
+processed/region_features.csv   (app/data_pipeline/build_region_features.py)
+        ↓
+app/services/score_adapter.py
+        ↓
+processed/region_scores.csv
+        ↓
+app/services/recommendation_service.py
+        ↓
+FastAPI POST /recommend
 ```
 
-### 파이프라인 실행 (지표 테이블 구축)
+추천 로직은 원본 공공데이터 파일을 직접 참조하지 않고, 최종적으로 `processed/region_scores.csv`만 사용합니다.
 
-```bash
-# 1) 초기 적재 — 다운로드한 파일에서 지표 테이블 구축
-python -m pipeline.loaders.file_loader
-python -m pipeline.standardize
-python -m pipeline.spatial_join
-python -m pipeline.aggregate
-python -m pipeline.normalize
+### 1. `region_features.csv`
+
+자치구별 원천 feature 테이블입니다 ([app/data_pipeline/build_region_features.py](app/data_pipeline/build_region_features.py)에서 생성).
+
+컬럼: `region_name`, `park_count`, `park_area_per_person`, `park_ratio`, `large_park_count`, `food_count`, `cafe_count`, `hamburger_count`, `fastfood_count`, `running_friendly_score`, `commercial_area_score`
+
+### 2. `region_scores.csv`
+
+추천 로직에서 실제로 사용하는 점수 테이블입니다 ([app/services/score_adapter.py](app/services/score_adapter.py)에서 생성).
+
+핵심 컬럼: `region_name`, `park_score`, `food_score`, `running_score`, `lifestyle_score`, `final_score`, `grade`
+
+### 3. `recommendation_service.py`
+
+사용자 query에서 선호 조건을 추출하고, query 기반 가중치로 `final_score`를 재계산해 Top 3를 반환합니다.
+
+## 데이터 및 Mock 정책
+
+현재 MVP는 **실제 수집 데이터**와 **일부 Mock/파생 feature**를 함께 사용합니다. 자세한 내용은 [docs/mock_policy.md](docs/mock_policy.md), [docs/feature_schema.md](docs/feature_schema.md)를 참고하세요.
+
+**실제 데이터 기반 feature**
+
+- `park_area_per_person`, `park_ratio` — 서울시 공원 통계
+- `food_count`, `cafe_count`, `hamburger_count`, `fastfood_count` — 소상공인시장진흥공단 상가업소 데이터
+
+**Mock 또는 파생 feature**
+
+- `park_count`, `large_park_count` — 개별 공원 목록 데이터가 없어 공원 통계 기반으로 파생 생성
+- `running_friendly_score` — 산책로/보행환경 데이터가 없어 공원 관련 feature의 가중합으로 대체
+- `commercial_area_score` — 여러 상권 feature의 정규화 가중합으로 파생 생성
+
+**투명성 원칙**
+
+- Mock은 아무 값이나 넣은 것이 아니라, 핵심 시나리오 데모를 위해 실제 데이터 구조에 맞춰 부족한 feature를 보완한 값입니다.
+- 추천 로직은 Mock 여부에 의존하지 않고 `region_scores.csv`의 점수만 사용합니다.
+- 추후 실제 산책로, 운동시설, 공원 접근성, 상권 밀도 데이터가 확보되면 Mock feature를 값만 교체하면 됩니다 (컬럼 구조는 유지).
+
+## 점수 계산 방식
+
+Score Adapter([app/services/score_adapter.py](app/services/score_adapter.py))가 `region_features.csv`의 각 feature를 0~100 min-max 정규화한 뒤 아래 가중합으로 카테고리 점수를 만듭니다.
+
+| 점수 | 구성 feature |
+|---|---|
+| `park_score` | `park_count`, `park_area_per_person`, `park_ratio`, `large_park_count` |
+| `food_score` | `food_count`, `cafe_count`, `hamburger_count`, `fastfood_count` |
+| `running_score` | `running_friendly_score`, `park_score` |
+| `lifestyle_score` | `commercial_area_score`, `food_score`, `cafe_count_score` |
+
+**final_score** (핵심 시나리오 기준 기본 가중치)
+
+```python
+final_score = (
+    0.35 * running_score
+    + 0.30 * park_score
+    + 0.25 * food_score
+    + 0.10 * lifestyle_score
+)
 ```
 
-```bash
-# 2) 주기 갱신 (선택) — 변동 데이터만 API로 최신화 후 재집계
-python -m pipeline.loaders.api_updater   # 실거래가·대기질
-python -m pipeline.aggregate
-python -m pipeline.normalize
-```
+`region_scores.csv`에 저장된 `final_score`는 이 기본 가중치 기준값입니다. 실제 API 호출 시에는 query에서 감지된 preference에 따라 가중치가 boost·재정규화되고, `final_score`도 그 가중치로 다시 계산됩니다 ([app/services/recommendation_service.py](app/services/recommendation_service.py)의 `build_weights`, `calculate_query_scores`).
+
+## 자연어 조건 추출 방식
+
+현재는 **LLM이 아니라 규칙 기반 키워드 매칭**을 사용합니다 ([app/services/recommendation_service.py](app/services/recommendation_service.py)의 `KEYWORD_GROUPS`).
+
+| preference | 키워드 |
+|---|---|
+| `running` | 러닝, 달리기, 조깅, 운동, 산책 |
+| `park` | 공원, 녹지, 한강, 산책로 |
+| `food` | 햄버거, 버거, 맥도날드, 롯데리아, 버거킹, 맘스터치, KFC |
+| `lifestyle` | 20대, 대학생, 사회초년생, 카페, 놀거리, 상권 |
+
+## API 사용법
 
 ### 서버 실행
 
 ```bash
-uvicorn backend.main:app --reload
+uvicorn app.main:app --reload
 ```
 
-## 개발 로드맵
+또는 uv를 사용하는 경우:
 
-1. 대상 지역 확정 및 데이터 파일 다운로드 (필요 시 실거래가·대기질 API 키 신청)
-2. 데이터 파이프라인 구축 — 파일 기반 초기 적재로 동별 지표 테이블 완성 (최우선)
-3. 고정 가중치로 순위 검증 (결과의 타당성 확인)
-4. 입구·출구 LLM 레이어 구현
-5. 대시보드 시각화 및 기여도 분해
-6. (여유 시) 변동 데이터 API 주기 갱신 로직 추가
+```bash
+uv run uvicorn app.main:app --reload
+```
 
-> **설계 원칙**: LLM보다 지표 테이블을 먼저 완성합니다. 모든 추천이 이 테이블을 조회하므로, 테이블이 부실하면 LLM이 정확히 동작해도 추천 품질이 확보되지 않습니다. API 갱신은 본체가 동작한 뒤 붙이는 부가 기능으로, 순서를 뒤바꾸지 않습니다.
+### Swagger UI
 
-## 설계 노트
+```
+http://127.0.0.1:8000/docs
+```
 
-이 프로젝트는 "모든 것을 LLM/에이전트로 처리하는" 접근을 의도적으로 피했습니다. 계산·정렬처럼 코드가 더 정확하고 빠른 작업은 백엔드에 두고, LLM은 자연어 이해와 설명이라는 고유 가치가 있는 지점에만 배치했습니다. 되묻기를 통한 성향 정제가 대화형 요소를 담당하며, 불필요한 도구 오케스트레이션은 배제해 시스템의 예측 가능성과 디버깅 용이성을 확보했습니다.
+### Health Check
 
-데이터 수집도 같은 절제 원칙을 따릅니다. 정적인 위치 데이터는 파일로 빠르게 적재하고, 변동성 있는 데이터(실거래가·대기질)만 API 갱신을 적용합니다. 데이터 성격에 따라 수집 전략을 차등화해, 불필요한 실시간 연동의 복잡도를 피하면서도 최신성이 중요한 지표는 갱신 가능하도록 설계했습니다.
+`GET /`
+
+```json
+{
+  "status": "ok",
+  "message": "Recommendation API is running"
+}
+```
+
+### 추천 API
+
+`POST /recommend`
+
+Request:
+
+```json
+{
+  "query": "나는 러닝을 좋아하는 20대 남자야. 근처에 공원과 햄버거집이 많은 동네를 추천해줘."
+}
+```
+
+Response 예시:
+
+```json
+{
+  "query": "나는 러닝을 좋아하는 20대 남자야. 근처에 공원과 햄버거집이 많은 동네를 추천해줘.",
+  "matched_preferences": ["running", "park", "food", "lifestyle"],
+  "weights": {
+    "running_score": 0.37,
+    "park_score": 0.29,
+    "food_score": 0.25,
+    "lifestyle_score": 0.09
+  },
+  "recommendations": [
+    {
+      "rank": 1,
+      "region_name": "송파구",
+      "final_score": 84.2,
+      "grade": "green",
+      "reason": "송파구는 데이터 기준 러닝 친화도와 공원 관련 점수가 높고, 햄버거/외식 인프라도 좋은 편입니다.",
+      "score_breakdown": {
+        "running_score": 86.0,
+        "park_score": 82.5,
+        "food_score": 79.2,
+        "lifestyle_score": 72.1
+      },
+      "matched_preferences": ["running", "park", "food", "lifestyle"]
+    }
+  ]
+}
+```
+
+> 특정 자치구 순위는 `region_features.csv`/Mock 값이 바뀌면 달라질 수 있습니다. 위 예시는 응답 구조 참고용입니다.
+
+## 테스트 방법
+
+```bash
+pytest
+```
+
+또는:
+
+```bash
+uv run pytest
+```
+
+특정 테스트 파일만 실행:
+
+```bash
+uv run pytest tests/test_recommendation.py -v
+```
+
+[tests/test_recommendation.py](tests/test_recommendation.py)에서 확인하는 내용:
+
+- `GET /` health check
+- `POST /recommend` 핵심 시나리오 응답 구조
+- `matched_preferences` 추출
+- `weights` 합이 1인지
+- Top 3 추천 결과 반환
+- `final_score` 0~100 범위
+- `grade` 값 검증 (`green`/`orange`/`red`)
+- 추천 결과 `final_score` 내림차순 정렬
+- 빈 query validation (422)
+- 부분 조건 query 동작 (예: "공원이 많은 동네를 추천해줘.")
+
+## 개발 순서 요약
+
+1. `docs/data_inventory.md` 작성
+2. `docs/feature_schema.md` 작성
+3. `processed/region_features.csv` 생성
+4. `app/services/score_adapter.py` 작성
+5. `processed/region_scores.csv` 생성
+6. `app/services/recommendation_service.py` 작성
+7. `app/schemas/recommendation.py` 작성
+8. `app/main.py`에서 `/recommend` API 연결
+9. `tests/test_recommendation.py` 작성
+10. README.md 업데이트
+
+## 추후 확장 방향
+
+1. **주거비 데이터 반영** — 서울시 부동산 전월세가 정보 기반 `rent_score` 추가
+2. **교통 접근성 반영** — 지하철역/버스정류소 위치 데이터 기반 `transport_score` 추가
+3. **안전 지표 반영** — 범죄 발생 현황, CCTV 설치 현황 기반 `safety_score` 추가
+4. **행정동 단위 추천** — 공간조인과 행정경계 데이터 적용
+5. **지도 히트맵 시각화** — Streamlit 또는 지도 라이브러리 활용
+6. **LLM 기반 조건 추출** — 현재 규칙 기반 키워드 추출을 LLM parser로 교체
+7. **설명 생성 고도화** — 실제 지표 수치를 포함한 더 자연스러운 추천 근거 생성

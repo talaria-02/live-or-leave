@@ -1,0 +1,58 @@
+[
+  {
+    "district": "성동구",
+    "rent_score": 0.58,
+    "transport_score": 0.82,
+    "park_score": 0.74,
+    "food_score": 0.86,
+    "description": "지하철 접근성과 카페·음식점 밀도가 높고 서울숲 등 여가 인프라가 강한 지역"
+  },
+  {
+    "district": "마포구",
+    "rent_score": 0.52,
+    "transport_score": 0.88,
+    "park_score": 0.68,
+    "food_score": 0.91,
+    "description": "상권과 대중교통 접근성이 좋고 카페·음식점 선택지가 많은 지역"
+  },
+  {
+    "district": "관악구",
+    "rent_score": 0.84,
+    "transport_score": 0.72,
+    "park_score": 0.63,
+    "food_score": 0.70,
+    "description": "상대적으로 주거비 부담이 낮고 대학가 기반 생활 인프라가 있는 지역"
+  },
+  {
+    "district": "강남구",
+    "rent_score": 0.22,
+    "transport_score": 0.95,
+    "park_score": 0.56,
+    "food_score": 0.93,
+    "description": "교통과 상권은 매우 우수하지만 주거비 부담이 큰 지역"
+  },
+  {
+    "district": "노원구",
+    "rent_score": 0.78,
+    "transport_score": 0.66,
+    "park_score": 0.82,
+    "food_score": 0.55,
+    "description": "주거비와 공원 접근성이 비교적 좋고 생활권이 안정적인 지역"
+  },
+  {
+    "district": "송파구",
+    "rent_score": 0.42,
+    "transport_score": 0.79,
+    "park_score": 0.90,
+    "food_score": 0.78,
+    "description": "공원·수변 공간과 생활 인프라가 좋지만 주거비는 다소 높은 지역"
+  },
+  {
+    "district": "영등포구",
+    "rent_score": 0.61,
+    "transport_score": 0.84,
+    "park_score": 0.58,
+    "food_score": 0.80,
+    "description": "교통 접근성과 업무·상권 인프라가 균형 잡힌 지역"
+  }
+]
