@@ -117,20 +117,22 @@ def neutral_dataframe(geojson: dict) -> pd.DataFrame:
 
 
 def render_map(df: pd.DataFrame, geojson: dict) -> None:
-    """서울 밖은 베이스맵 자체가 없어서(visible=False) 아예 그려지지 않는다 —
-    타일 지도가 아니라 우리가 가진 폴리곤만 그리는 방식이라 마스킹이 따로 필요 없다."""
-    fig = px.choropleth(
+    """px.choropleth(SVG)는 이 폴리곤 개수·정밀도에서 눈에 띄게 느려서(배포 시 특히
+    문제) WebGL로 그리는 choropleth_map을 쓴다. map_style="white-bg"는 타일을 아예
+    안 불러오는 빈 배경이라, 서울 밖 지역도 여전히 그려지지 않는다."""
+    fig = px.choropleth_map(
         df, geojson=geojson, locations="code", color="tier",
         featureidkey="properties.code",
         color_discrete_map=TIER_COLORS,
         category_orders={"tier": list(TIER_COLORS)},
         custom_data=["hover"],
+        map_style="white-bg",
+        zoom=9.5, center={"lat": 37.5665, "lon": 126.9780},
     )
     fig.update_traces(
         hovertemplate="%{customdata[0]}<extra></extra>",
         marker_line_width=0.3, marker_line_color="#9e9e9e",
     )
-    fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0), height=760,
         legend_title_text="",
