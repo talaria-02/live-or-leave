@@ -2,6 +2,10 @@ pydantic>=2.0
 scipy>=1.10
 numpy>=1.24
 pyproj>=3.5
+# build_dong_boundaries.py (지도 GeoJSON 생성) 전용 의존성:
+pyshp>=3.1
+pandas>=2.0
+openpyxl>=3.1
 # Solar API 교체 시 추가 예정:
 # litellm>=1.0
 # fastapi>=0.110
