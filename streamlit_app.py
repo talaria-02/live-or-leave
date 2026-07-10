@@ -46,6 +46,9 @@ TIER_LABELS = {
     "neutral": "그 외",
 }
 
+BORDER_WIDTH = 0.6
+BORDER_COLOR = "#616161"
+
 
 @st.cache_resource
 def load_agent() -> RecommendationAgent:
@@ -117,9 +120,16 @@ def neutral_dataframe(geojson: dict) -> pd.DataFrame:
 
 
 def render_map(df: pd.DataFrame, geojson: dict) -> None:
-    """px.choropleth(SVG)는 이 폴리곤 개수·정밀도에서 눈에 띄게 느려서(배포 시 특히
-    문제) WebGL로 그리는 choropleth_map을 쓴다. map_style="white-bg"는 타일을 아예
-    안 불러오는 빈 배경이라, 서울 밖 지역도 여전히 그려지지 않는다."""
+    """WebGL(choropleth_map)로 그린다 — SVG(choropleth)는 이 폴리곤 개수·정밀도에서
+    눈에 띄게 느리다(배포 시 특히 문제). map_style="white-bg"는 타일을 아예 안
+    불러오는 빈 배경이라 서울 밖 지역도 그려지지 않는다.
+
+    마우스오버 시 폴리곤 테두리 자체를 굵게 강조하려면(hover event -> JS로 marker
+    restyle) components.html에 커스텀 JS를 심어야 하는데, 실제로 시도해보니 이
+    조합이 WebGL 렌더링 자체를 깨뜨렸다 — 지도가 안 보이고 hover pick도 안 먹힘.
+    CDN에서 plotly.js를 통째로 한 번 더 받아오는 것도 방금 고친 배포 성능과
+    상충된다. 그래서 안전한 선언적 API만으로: 호버 시 뜨는 툴팁 자체를 그 동의
+    티어 색으로 채우고 크게 키워서, 위치를 가리키는 라벨이 눈에 띄게 만든다."""
     fig = px.choropleth_map(
         df, geojson=geojson, locations="code", color="tier",
         featureidkey="properties.code",
@@ -129,17 +139,22 @@ def render_map(df: pd.DataFrame, geojson: dict) -> None:
         map_style="white-bg",
         zoom=9.5, center={"lat": 37.5665, "lon": 126.9780},
     )
-    fig.update_traces(
-        hovertemplate="%{customdata[0]}<extra></extra>",
-        marker_line_width=0.3, marker_line_color="#9e9e9e",
-    )
+    fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
+    for trace in fig.data:
+        n = len(trace.locations)
+        trace.marker.line.width = [BORDER_WIDTH] * n
+        trace.marker.line.color = [BORDER_COLOR] * n
+        tier_color = TIER_COLORS.get(trace.name, "#333333")
+        trace.hoverlabel = dict(
+            bgcolor=tier_color, bordercolor="white",
+            font=dict(color="white", size=14, family="Arial Black"),
+        )
+        trace.name = TIER_LABELS.get(trace.name, trace.name)
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0), height=760,
         legend_title_text="",
         legend=dict(orientation="h", yanchor="bottom", y=1.0),
     )
-    for trace in fig.data:
-        trace.name = TIER_LABELS.get(trace.name, trace.name)
     st.plotly_chart(fig, width="stretch")
 
 
