@@ -11,9 +11,11 @@ ReAct 루프 오케스트레이터.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from app.agent.mock_llm import MockLLM
+from app.agent.solar_llm import SolarLLM
 from app.agent.tools import ToolExecutor
 from app.data.csv_repository import CsvDongRepository
 from app.schemas.tools import RecommendTool
@@ -28,9 +30,10 @@ class AgentResult:
 
 
 class RecommendationAgent:
-    def __init__(self, max_steps: int = 4):
+    def __init__(self, max_steps: int = 4, llm=None):
         repo = CsvDongRepository()
-        self.llm = MockLLM()
+        # UPSTAGE_API_KEY가 있으면 실제 Solar API, 없으면 mock으로 개발 가능하게 유지
+        self.llm = llm or (SolarLLM() if os.environ.get("UPSTAGE_API_KEY") else MockLLM())
         self.tools = ToolExecutor(repo)
         self.max_steps = max_steps
 

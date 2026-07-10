@@ -1,14 +1,19 @@
 """
-Upstage Solar API 어댑터 — mock_llm.py를 대체할 실제 구현 (스켈레톤).
+Upstage Solar API 어댑터 — mock_llm.py를 대체할 실제 구현.
 
-★ 미완성: Solar 호출 부분(_call)을 실제 LiteLLM 연동으로 채워야 함. ★
 mock_llm.MockLLM과 동일한 인터페이스(parse_intent, explain)를 구현하므로,
-loop.py에서 MockLLM 대신 이 클래스를 주입하면 교체 완료.
+loop.py에서 MockLLM 대신 이 클래스를 주입하면 교체 완료 (UPSTAGE_API_KEY가
+설정돼 있으면 loop.py가 자동으로 이 클래스를 선택한다).
 
 교체 원칙 (HANDOFF.md 설계원칙 2·3 준수):
   - parse_intent: LLM은 4단계 라벨만 출력. 숫자 생성 금지.
   - explain: 제공된 수치만 근거로. 수치에 없는 내용 추측 금지.
   - 파싱 실패 폴백·합=1 정규화는 서비스 계층(scoring)이 이미 처리.
+
+Solar API는 OpenAI 호환 엔드포인트(https://api.upstage.ai/v1)라 LiteLLM의
+openai-compatible 경유(model="openai/<모델명>", api_base 지정)로 호출한다.
+litellm import는 _call 안에서 지연 로딩해, 패키지가 없어도(mock만 쓰는 개발
+환경) 이 모듈을 import하는 데는 지장이 없게 한다.
 """
 from __future__ import annotations
 
@@ -23,8 +28,8 @@ from app.schemas.tools import (
     ParsedIntent,
 )
 
-# LiteLLM 경유 Upstage Solar API. 실제 키·모델명은 환경변수로.
-# import litellm
+DEFAULT_MODEL = "solar-pro2-251215"
+DEFAULT_API_BASE = "https://api.upstage.ai/v1"
 
 _PARSE_SYSTEM_BASE = """사용자의 동네 선호를 분석해 아래 4개 카테고리의 중요도를
 각각 very_high / high / medium / none 중 하나로만 판단해 JSON으로 출력하라.
@@ -60,18 +65,25 @@ def _build_parse_system() -> str:
 
 class SolarLLM:
     def __init__(self, model: str | None = None):
-        self.model = model or os.environ.get("SOLAR_MODEL", "hyperclova-x")
+        self.model = model or os.environ.get("SOLAR_MODEL", DEFAULT_MODEL)
+        self.api_base = os.environ.get("UPSTAGE_API_BASE", DEFAULT_API_BASE)
+        self.api_key = os.environ.get("UPSTAGE_API_KEY")
 
     def _call(self, system: str, user: str) -> str:
-        """★ 채워야 함: LiteLLM으로 Solar API 호출 후 텍스트 반환. ★"""
-        # resp = litellm.completion(
-        #     model=self.model,
-        #     messages=[{"role": "system", "content": system},
-        #               {"role": "user", "content": user}],
-        #     temperature=0.1,  # 재현성 위해 낮게
-        # )
-        # return resp.choices[0].message.content
-        raise NotImplementedError("Solar API 호출을 구현하세요 (LiteLLM 연동).")
+        if not self.api_key:
+            raise RuntimeError("UPSTAGE_API_KEY 환경변수가 설정되지 않았습니다.")
+
+        import litellm  # 지연 로딩: mock만 쓰는 환경에서는 패키지가 없어도 무방
+
+        resp = litellm.completion(
+            model=f"openai/{self.model}",
+            api_base=self.api_base,
+            api_key=self.api_key,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            temperature=0.1,  # 재현성 위해 낮게
+        )
+        return resp.choices[0].message.content
 
     def parse_intent(self, text: str) -> ParsedIntent:
         raw = self._call(_build_parse_system(), text)

@@ -10,6 +10,15 @@ import pytest
 from app.schemas.domain import DongRawMetrics
 
 
+@pytest.fixture(autouse=True)
+def _no_live_solar_calls(monkeypatch):
+    """UPSTAGE_API_KEY가 로컬 쉘에 있어도 테스트는 항상 MockLLM을 쓰게 강제한다.
+    (RecommendationAgent가 이 값 유무로 SolarLLM/MockLLM을 자동 선택하므로,
+    실수로 실제 API를 호출·과금하는 걸 막는다. test_solar_llm.py는 개별
+    테스트에서 monkeypatch.setenv로 필요할 때만 다시 설정한다.)"""
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+
+
 def _raw(code, dong, gu, **kw):
     base = dict(
         population=10000, crime_rate=0, cctv_cnt=0,

@@ -1,12 +1,14 @@
 """agent/solar_llm.py 단위 테스트.
 
-_call()은 아직 미구현(NotImplementedError)이라 실제 Solar 응답을 받을 수 없다.
 parse_intent/explain의 파싱·폴백·전달 로직 자체는 _call의 반환값에만 의존하므로,
-monkeypatch로 _call을 대체해 그 로직을 _call 구현과 독립적으로 검증한다.
+monkeypatch로 _call을 대체해 그 로직을 _call 구현(LiteLLM 경유 Solar 호출)과
+독립적으로 검증한다. _call 자체의 LiteLLM 연동은 별도 테스트에서 확인한다.
 """
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -18,16 +20,49 @@ def _stub_call(monkeypatch, response: str):
     monkeypatch.setattr(SolarLLM, "_call", lambda self, system, user: response)
 
 
-def test_call_not_implemented_yet():
-    with pytest.raises(NotImplementedError):
+def test_call_raises_without_api_key(monkeypatch):
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
         SolarLLM()._call("system", "user")
 
 
-# ---------- parse_intent: _call 자체가 실패하는 경우 (현재 상태) ----------
+def test_call_invokes_litellm_with_solar_openai_compatible_endpoint(monkeypatch):
+    captured = {}
 
-def test_parse_intent_propagates_when_call_raises():
-    """_call 예외는 try/except 바깥에서 일어나므로 현재는 그대로 전파된다."""
-    with pytest.raises(NotImplementedError):
+    class _FakeMessage:
+        content = "solar 응답"
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return _FakeResponse()
+
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(completion=fake_completion))
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+
+    result = SolarLLM()._call("system", "user")
+
+    assert result == "solar 응답"
+    assert captured["model"] == "openai/solar-pro2-251215"
+    assert captured["api_base"] == "https://api.upstage.ai/v1"
+    assert captured["api_key"] == "test-key"
+    assert captured["messages"] == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "user"},
+    ]
+
+
+# ---------- parse_intent: _call 자체가 실패하는 경우 (예: API 키 미설정) ----------
+
+def test_parse_intent_propagates_when_call_raises(monkeypatch):
+    """_call 예외는 try/except 바깥에서 일어나므로 그대로 전파된다."""
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
         SolarLLM().parse_intent("아무 문장")
 
 
@@ -106,9 +141,10 @@ def _fake_result() -> dict:
     }]}
 
 
-def test_explain_propagates_call_failure_when_recommendations_exist():
+def test_explain_propagates_call_failure_when_recommendations_exist(monkeypatch):
     """explain은 parse_intent와 달리 _call 실패를 폴백 없이 그대로 전파한다 (현재 구현)."""
-    with pytest.raises(NotImplementedError):
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
         SolarLLM().explain("아무 문장", _fake_result())
 
 
