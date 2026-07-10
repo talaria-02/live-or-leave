@@ -15,17 +15,29 @@ class ToolExecutor:
         raws = self.repo.all_metrics()
         scores = scoring.score_dongs(raws)
 
-        extra_counts: dict[str, dict[str, int]] = {}
-        if args.extra_categories:
-            facility_repo = get_facility_repository()
-            for cat in args.extra_categories:
-                extra_counts[cat] = {
-                    r.code: facility_repo.count(r.gu, r.dong, cat) for r in raws
-                }
+        facility_repo = (
+            get_facility_repository()
+            if args.extra_categories or args.required_categories
+            else None
+        )
+
+        extra_counts: dict[str, dict[str, int]] = {
+            cat: {r.code: facility_repo.count(r.gu, r.dong, cat) for r in raws}
+            for cat in args.extra_categories
+        }
         extra_scores = scoring.score_extra_categories(raws, extra_counts)
 
+        required_counts: dict[str, dict[str, int]] = {
+            cat: {r.code: facility_repo.count(r.gu, r.dong, cat) for r in raws}
+            for cat in args.required_categories
+        }
+        pool, disqualified = (
+            scoring.partition_by_required_categories(scores, required_counts)
+            if required_counts else (scores, [])
+        )
+
         weights = scoring.preference_to_weights(args.preference, args.extra_categories)
-        recs = scoring.rank(scores, weights, top_n=args.top_n,
+        recs = scoring.rank(pool, weights, top_n=args.top_n,
                             require_large_hospital=args.require_large_hospital,
                             extra_scores=extra_scores)
 
@@ -35,7 +47,15 @@ class ToolExecutor:
                 rec_dict["extra_facilities"] = {
                     cat: extra_counts[cat].get(rec.scores.code, 0) for cat in extra_counts
                 }
-        return {"weights": weights, "recommendations": rec_dicts}
+
+        result = {"weights": weights, "recommendations": rec_dicts}
+        if disqualified:
+            result["disqualified"] = [
+                {"code": d["scores"].code, "gu": d["scores"].gu,
+                 "dong": d["scores"].dong, "missing": d["missing"]}
+                for d in disqualified
+            ]
+        return result
 
     def compare(self, args: CompareTool) -> dict:
         a, b = self.repo.get(args.gu_a), self.repo.get(args.gu_b)

@@ -70,6 +70,44 @@ def test_no_facility_keyword_leaves_extra_categories_empty():
     assert intent.extra_categories == []
 
 
+# ---------- 필수/선택 요구사항 구조화 입력 ----------
+
+def test_required_section_becomes_hard_filter_not_score():
+    text = "필수 요구사항: 헬스장\n선택 요구사항: 안전하고 무서운 밤길 없는 조용한 동네"
+    intent = MockLLM().parse_intent(text)
+    assert intent.required_categories == ["헬스장"]
+    assert "헬스장" not in intent.extra_categories
+    assert intent.preference.safety == Importance.VERY_HIGH
+    assert intent.preference.environment != Importance.NONE
+
+
+def test_optional_section_keywords_do_not_leak_into_required():
+    text = "필수 요구사항: 버거\n선택 요구사항: 헬스장 있으면 좋겠어요"
+    intent = MockLLM().parse_intent(text)
+    assert intent.required_categories == ["버거"]
+    assert intent.extra_categories == ["헬스장"]
+
+
+def test_marker_order_can_be_reversed():
+    text = "선택 요구사항: 안전하고 무서운 밤길 없는 곳\n필수 요구사항: 헬스장"
+    intent = MockLLM().parse_intent(text)
+    assert intent.required_categories == ["헬스장"]
+    assert intent.preference.safety == Importance.VERY_HIGH
+
+
+def test_no_markers_treats_whole_text_as_optional_backward_compat():
+    """마커 없는 자유 문장은 기존처럼 전부 선택(점수화) 요구사항으로 취급된다."""
+    intent = MockLLM().parse_intent("헬스장 있는 곳")
+    assert intent.required_categories == []
+    assert intent.extra_categories == ["헬스장"]
+
+
+def test_required_only_with_no_optional_keywords_does_not_trigger_clarification():
+    intent = MockLLM().parse_intent("필수 요구사항: 헬스장\n선택 요구사항: ")
+    assert intent.needs_clarification is False
+    assert intent.required_categories == ["헬스장"]
+
+
 # ---------- explain ----------
 
 def test_explain_no_recommendations_returns_fixed_message():

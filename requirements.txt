@@ -7,3 +7,10 @@ tenacity>=8.0  # litellm의 num_retries(재시도) 기능이 내부적으로 필
 python-dotenv>=1.0
 fastapi>=0.110
 uvicorn>=0.27
+# build_dong_boundaries.py (지도 GeoJSON 생성) 전용 의존성:
+pyshp>=3.1
+pandas>=2.0
+openpyxl>=3.1
+# streamlit_app.py (UI) 전용 의존성:
+streamlit>=1.38
+plotly>=5.24

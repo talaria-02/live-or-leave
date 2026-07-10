@@ -40,6 +40,23 @@ def score_extra_categories(
     return result
 
 
+def partition_by_required_categories(
+    scores: list[DongScores], required_counts: dict[str, dict[str, int]]
+) -> tuple[list[DongScores], list[dict]]:
+    """required_counts에 담긴 업종을 전부(AND) 반경 내에 가진 동만 통과시킨다.
+    떨어진 동은 어떤 업종이 없어서 떨어졌는지(실격 사유)와 함께 반환한다 —
+    필터가 '왜' 걸렀는지 사용자/개발자가 검증할 수 있게 하기 위함."""
+    qualified = []
+    disqualified = []
+    for s in scores:
+        missing = [cat for cat, counts in required_counts.items() if counts.get(s.code, 0) < 1]
+        if missing:
+            disqualified.append({"scores": s, "missing": missing})
+        else:
+            qualified.append(s)
+    return qualified, disqualified
+
+
 def _percentile_norm(values: dict[str, float], invert: bool = False) -> dict[str, float]:
     """백분위 정규화 (0~1). invert=True면 낮을수록 1점."""
     items = sorted(values.items(), key=lambda x: x[1])

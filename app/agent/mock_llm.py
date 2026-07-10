@@ -41,10 +41,47 @@ _FACILITY_SYNONYMS: dict[str, list[str]] = {
     "수영": ["수영장"],
 }
 
+# UI가 "필수 요구사항:"/"선택 요구사항:" 구역으로 나눠 보낼 때 쓰는 마커.
+# 마커가 없는 자유 문장은 전부 '선택 요구사항'으로 취급해 기존 동작을 그대로 유지한다.
+_REQUIRED_MARKER = "필수 요구사항"
+_OPTIONAL_MARKER = "선택 요구사항"
+
+
+def _split_required_optional(text: str) -> tuple[str, str]:
+    markers = [
+        (idx, kind)
+        for marker, kind in ((_REQUIRED_MARKER, "required"), (_OPTIONAL_MARKER, "optional"))
+        for idx in [text.find(marker)]
+        if idx != -1
+    ]
+    if not markers:
+        return "", text
+    markers.sort()
+    sections = {"required": "", "optional": ""}
+    for i, (idx, kind) in enumerate(markers):
+        end = markers[i + 1][0] if i + 1 < len(markers) else len(text)
+        sections[kind] = text[idx:end]
+    return sections["required"], sections["optional"]
+
+
+def _match_facility_categories(text: str) -> list[str]:
+    t = text.lower()
+    matched: list[str] = []
+    for kw, categories in _FACILITY_SYNONYMS.items():
+        if kw in t:
+            for c in categories:
+                if c not in matched:
+                    matched.append(c)
+    return matched
+
 
 class MockLLM:
     def parse_intent(self, text: str) -> ParsedIntent:
-        t = text.lower()
+        required_part, optional_part = _split_required_optional(text)
+
+        # 4개 카테고리 라벨링과 '선택' 업종은 선택 요구사항 구역에서만 (마커가 없으면
+        # optional_part == 전체 텍스트라 기존 자유 문장 동작과 100% 동일하다).
+        t = optional_part.lower()
         labels: dict[str, Importance] = {}
         for cat, kws in _KW.items():
             hit = sum(1 for k in kws if k in t)
@@ -58,22 +95,19 @@ class MockLLM:
         pref = CategoryPreference(**labels)
         require_hosp = ("대형병원" in text) or ("종합병원" in text)
 
-        extra: list[str] = []
-        for kw, categories in _FACILITY_SYNONYMS.items():
-            if kw in t:
-                for c in categories:
-                    if c not in extra:
-                        extra.append(c)
+        extra = _match_facility_categories(optional_part)
+        required = _match_facility_categories(required_part)
 
-        # 4개 카테고리도 모호하고 언급된 업종도 없으면 성향 모호 → 되묻기
-        if all(v == Importance.NONE for v in labels.values()) and not extra:
+        # 4개 카테고리도 모호하고 선택/필수 업종도 없으면 성향 모호 → 되묻기
+        if all(v == Importance.NONE for v in labels.values()) and not extra and not required:
             return ParsedIntent(
                 preference=pref,
                 needs_clarification=True,
                 clarify_question="어떤 점을 가장 중요하게 보세요? (안전 / 편의 / 교통 / 환경)",
             )
         return ParsedIntent(
-            preference=pref, require_large_hospital=require_hosp, extra_categories=extra
+            preference=pref, require_large_hospital=require_hosp,
+            extra_categories=extra, required_categories=required,
         )
 
     def explain(self, user_text: str, result: dict) -> str:

@@ -193,3 +193,35 @@ def test_rank_without_extra_scores_has_no_extra_keys_in_contributions(sample_raw
     weights = {"safety": 1.0, "convenience": 0.0, "mobility": 0.0, "environment": 0.0}
     recs = scoring.rank(scores, weights, top_n=1)
     assert set(recs[0].contributions.keys()) == set(scoring.CATEGORIES)
+
+
+# ---------- partition_by_required_categories ----------
+
+def test_partition_by_required_categories_splits_pass_and_fail(sample_raws):
+    scores = scoring.score_dongs(sample_raws)
+    required_counts = {"헬스장": {"A1": 1, "B1": 0, "C1": 2}}
+    qualified, disqualified = scoring.partition_by_required_categories(scores, required_counts)
+    assert {s.code for s in qualified} == {"A1", "C1"}
+    assert len(disqualified) == 1
+    assert disqualified[0]["scores"].code == "B1"
+    assert disqualified[0]["missing"] == ["헬스장"]
+
+
+def test_partition_by_required_categories_requires_all_categories_and(sample_raws):
+    scores = scoring.score_dongs(sample_raws)
+    required_counts = {
+        "헬스장": {"A1": 1, "B1": 1, "C1": 1},
+        "버거": {"A1": 0, "B1": 1, "C1": 1},
+    }
+    qualified, disqualified = scoring.partition_by_required_categories(scores, required_counts)
+    assert {s.code for s in qualified} == {"B1", "C1"}
+    assert disqualified[0]["scores"].code == "A1"
+    assert disqualified[0]["missing"] == ["버거"]
+
+
+def test_partition_by_required_categories_missing_code_counts_as_zero(sample_raws):
+    scores = scoring.score_dongs(sample_raws)
+    required_counts = {"헬스장": {"A1": 1}}  # B1, C1은 언급 없음 → 0 취급 → 탈락
+    qualified, disqualified = scoring.partition_by_required_categories(scores, required_counts)
+    assert {s.code for s in qualified} == {"A1"}
+    assert {d["scores"].code for d in disqualified} == {"B1", "C1"}

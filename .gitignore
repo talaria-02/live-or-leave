@@ -1,9 +1,11 @@
 # 원본 공공데이터 (용량 큼, 재현 가능 — data.seoul.go.kr 등에서 재다운로드 가능)
 dataset/
 dataset.zip
+space_info/
 
-# 빌드 산출물 dong_metrics.csv는 예외로 커밋한다.
-# dataset/가 없어도 앱이 바로 돌아가야 하고(HANDOFF.md 참고), 파일 자체가 32KB로 작기 때문.
+# 빌드 산출물 dong_metrics.csv, dong_boundaries.geojson은 예외로 커밋한다.
+# 원본(dataset/, space_info/)이 없어도 앱·지도가 바로 돌아가야 하고(HANDOFF.md 참고),
+# 파일 자체도 각각 32KB/4.9MB로 크지 않기 때문.
 
 # Python
 __pycache__/
@@ -23,6 +25,7 @@ env/
 # 에디터/도구별 로컬 설정
 .claude/settings.local.json
 .vscode/
+.streamlit/
 
 # OS
 .DS_Store
