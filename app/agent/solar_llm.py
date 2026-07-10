@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from app.data.facility_repository import get_facility_repository
 from app.schemas.domain import CATEGORY_CAVEATS
@@ -27,6 +30,9 @@ from app.schemas.tools import (
     Importance,
     ParsedIntent,
 )
+
+# 프로젝트 루트의 .env (없으면 조용히 무시됨) — UPSTAGE_API_KEY 등을 여기서 읽는다.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_MODEL = "solar-pro2-251215"
 DEFAULT_API_BASE = "https://api.upstage.ai/v1"

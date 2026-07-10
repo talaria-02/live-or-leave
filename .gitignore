@@ -16,7 +16,7 @@ __pycache__/
 venv/
 env/
 
-# 환경변수/시크릿 (HCX API 키 등)
+# 환경변수/시크릿 (UPSTAGE_API_KEY 등)
 .env
 .env.*
 
