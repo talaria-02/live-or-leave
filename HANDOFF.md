@@ -63,7 +63,7 @@ dong_metrics.csv          # 행정동 지표 테이블 (빌더 산출물)
 dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 빌더 산출물, 커밋됨)
 seoul_gu.geojson          # 자치구 경계 (참고용)
 demo.py                   # 시나리오 데모 실행 (실제 Solar API 사용, .env 필요)
-streamlit_app.py          # 지도 UI. 기본값 Solar, STREAMLIT_USE_MOCK_LLM=1이면 mock
+streamlit_app.py          # 지도 UI. 키 있으면 Solar, 없으면 자동 mock, STREAMLIT_USE_MOCK_LLM=1로 강제 mock
 .env                      # UPSTAGE_API_KEY 등 (gitignore됨, 각자 로컬에 개별 생성)
 tests/test_main.py        # FastAPI 컨트롤러 테스트 (TestClient, MockLLM으로 의존성 오버라이드)
 tests/test_flow.py        # 흐름 검증 (MockLLM 명시 주입)
@@ -222,11 +222,14 @@ curl -N --get "http://127.0.0.1:8000/recommend" \
 ### 지도 UI(streamlit_app.py) 직접 확인하기
 
 ```bash
-streamlit run streamlit_app.py                       # 기본값: 실제 Solar API
-STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # 빠른 반복 작업용: mock
+streamlit run streamlit_app.py                          # .env에 키 있으면 실제 Solar API
+STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # 빠른 반복 작업용: 강제 mock
 ```
 
-실제 시연 때는 위쪽(Solar) 그대로 쓰면 된다. 다만 이 UI는 입력창 값이 바뀔 때마다
-(포커스 아웃/Ctrl+Enter) `parse_intent`+`explain` 2회를 다시 호출하는 구조라,
-색깔·레이아웃만 반복해서 확인할 땐 `STREAMLIT_USE_MOCK_LLM=1`로 켜서 즉시 반응하는
-mock으로 돌리는 게 편하다 (무료·결정론적·키 불필요).
+`.env`에 `UPSTAGE_API_KEY`가 없으면 `load_agent()`가 자동으로 mock으로 낮추고
+화면 상단에 "⚠ Mock LLM으로 동작 중 (UPSTAGE_API_KEY 없음)" 캡션이 뜬다 — 앱이
+죽지 않고 항상 실행은 된다. 키가 있어도 색깔·레이아웃만 반복 확인할 땐
+`STREAMLIT_USE_MOCK_LLM=1`로 강제 전환하는 게 빠르다 (이땐 캡션에 "STREAMLIT_USE_MOCK_LLM
+설정됨"으로 표시). 이 UI는 입력창 값이 바뀔 때마다(포커스 아웃/Ctrl+Enter)
+`parse_intent`+`explain` 2회를 다시 호출하는 구조라, 실제 시연 때만 키를 넣고
+Solar로 돌리는 걸 권장한다.
