@@ -131,42 +131,57 @@ def neutral_dataframe(geojson: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def render_map(df: pd.DataFrame, geojson: dict) -> None:
-    """WebGL(choropleth_map)로 그린다 — SVG(choropleth)는 이 폴리곤 개수·정밀도에서
-    눈에 띄게 느리다(배포 시 특히 문제). map_style="white-bg"는 타일을 아예 안
-    불러오는 빈 배경이라 서울 밖 지역도 그려지지 않는다.
+_HOVER_CSS = """
+<style>
+.choroplethlayer path {
+    transition: filter 0.12s ease-out, stroke-width 0.12s ease-out;
+}
+.choroplethlayer path:hover {
+    filter: brightness(1.35) saturate(1.5) drop-shadow(0 0 6px rgba(255,255,255,0.95));
+    stroke: #ffffff !important;
+    stroke-width: 2px !important;
+    cursor: pointer;
+}
+</style>
+"""
 
-    마우스오버 시 폴리곤 테두리 자체를 굵게 강조하려면(hover event -> JS로 marker
-    restyle) components.html에 커스텀 JS를 심어야 하는데, 실제로 시도해보니 이
-    조합이 WebGL 렌더링 자체를 깨뜨렸다 — 지도가 안 보이고 hover pick도 안 먹힘.
-    CDN에서 plotly.js를 통째로 한 번 더 받아오는 것도 방금 고친 배포 성능과
-    상충된다. 그래서 안전한 선언적 API만으로: 호버 시 뜨는 툴팁 자체를 그 동의
-    티어 색으로 채우고 크게 키워서, 위치를 가리키는 라벨이 눈에 띄게 만든다."""
-    fig = px.choropleth_map(
+
+def render_map(df: pd.DataFrame, geojson: dict) -> None:
+    """마우스오버 시 폴리곤 자체가 밝아지며 흰 광택 테두리가 도는 효과는 순수
+    CSS :hover로 구현한다 — 실제 DOM에 폴리곤별 <path>가 있는 SVG 렌더러
+    (px.choropleth)에서만 가능하다 (WebGL/캔버스는 개별 요소가 없어 CSS를
+    걸 대상이 없다). JS로 이 효과를 흉내내려던 이전 시도(components.html +
+    plotly_hover 이벤트로 marker restyle)는 이 환경에서 WebGL 렌더링 자체를
+    깨뜨렸는데, CSS :hover는 브라우저 내장 기능이라 그런 위험이 없다.
+
+    좌표를 이미 93% 단순화해둔 덕에(평균 481점→33점/폴리곤) SVG로 돌아가도
+    체감 성능 차이가 크지 않았다 — 단순화 전이었다면 이 전환은 못 했을 것.
+    """
+    fig = px.choropleth(
         df, geojson=geojson, locations="code", color="tier",
         featureidkey="properties.code",
         color_discrete_map=TIER_COLORS,
         category_orders={"tier": list(TIER_COLORS)},
         custom_data=["hover"],
-        map_style="white-bg",
-        zoom=9.5, center={"lat": 37.5665, "lon": 126.9780},
     )
-    fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
+    fig.update_traces(
+        hovertemplate="%{customdata[0]}<extra></extra>",
+        marker_line_width=BORDER_WIDTH, marker_line_color=BORDER_COLOR,
+    )
     for trace in fig.data:
-        n = len(trace.locations)
-        trace.marker.line.width = [BORDER_WIDTH] * n
-        trace.marker.line.color = [BORDER_COLOR] * n
         tier_color = TIER_COLORS.get(trace.name, "#333333")
         trace.hoverlabel = dict(
             bgcolor=tier_color, bordercolor="white",
             font=dict(color="white", size=14, family="Arial Black"),
         )
         trace.name = TIER_LABELS.get(trace.name, trace.name)
+    fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0), height=760,
         legend_title_text="",
         legend=dict(orientation="h", yanchor="bottom", y=1.0),
     )
+    st.markdown(_HOVER_CSS, unsafe_allow_html=True)
     st.plotly_chart(fig, width="stretch")
 
 
