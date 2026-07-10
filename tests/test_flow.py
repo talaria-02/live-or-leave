@@ -1,10 +1,20 @@
-"""흐름 검증 테스트 (행정동 단위)."""
+"""흐름 검증 테스트 (행정동 단위).
+
+RecommendationAgent 기본값은 실제 Solar API이므로, 여기서는 흐름(가중치·랭킹·
+되묻기 분기) 자체를 빠르고 결정론적으로 검증하기 위해 MockLLM을 명시적으로
+주입한다. 실제 Solar API 응답 품질 검증은 demo.py로 수동 확인한다.
+"""
 from __future__ import annotations
 
 from app.agent.loop import RecommendationAgent
+from app.agent.mock_llm import MockLLM
 from app.data.csv_repository import CsvDongRepository
 from app.schemas.tools import CategoryPreference, Importance
 from app.services import scoring
+
+
+def _agent() -> RecommendationAgent:
+    return RecommendationAgent(llm=MockLLM())
 
 
 def test_weights_sum_to_one():
@@ -27,7 +37,7 @@ def test_within_gu_discrimination():
 
 
 def test_preference_changes_ranking():
-    agent = RecommendationAgent()
+    agent = _agent()
     a = agent.run("공원 많고 조용한 동네")
     b = agent.run("지하철 교통 편한 곳 야근")
     assert a.data["weights"] != b.data["weights"]
@@ -36,7 +46,7 @@ def test_preference_changes_ranking():
 
 
 def test_clarification():
-    agent = RecommendationAgent()
+    agent = _agent()
     assert agent.run("아무데나 좋은 곳").kind == "clarify"
     print("✓ 모호한 입력 → 되묻기")
 
@@ -51,7 +61,7 @@ def test_hospital_filter():
 
 
 def test_deterministic():
-    agent = RecommendationAgent()
+    agent = _agent()
     t = "안전하고 지하철 가까운 곳"
     r1 = [x["dong"] for x in agent.run(t).data["recommendations"]]
     r2 = [x["dong"] for x in agent.run(t).data["recommendations"]]

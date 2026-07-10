@@ -15,16 +15,16 @@
 - **레이어드 아키텍처 골격 완성**: schemas → services → agent → data 계층 분리.
 - **스코어링 로직 완성**: 분위수 정규화 + 가중 스코어링 + 순위. 순수 함수라 테스트 쉬움.
 - **에이전트 흐름 완성**: 입구(의도 파싱) → 백엔드(스코어링) → 출구(근거 설명),
-  모호하면 되묻기 1회. `demo.py`로 3개 시나리오 동작 확인됨.
-- **흐름 검증 테스트 통과**: `python -m tests.test_flow` (6개 검증).
-
-## 지금 무엇이 가짜인가 (여기가 다음 작업)
-
-- **`app/agent/mock_llm.py`가 진짜 LLM이 아님**. "안전" 같은 글자를 세는 키워드
-  매칭으로 실제 LLM을 흉내낸 스텁이다. 이걸 실제 Upstage Solar API 호출로 교체하는 것이
-  가장 우선순위 높은 다음 작업.
-- 교체는 **이 파일 하나만** 바꾸면 된다. `parse_intent`와 `explain`의 시그니처를
-  유지한 채 내부를 Solar API 호출로 바꾸면 나머지 계층은 불변. (레이어 분리의 목적)
+  모호하면 되묻기 1회. `demo.py`로 4개 시나리오 동작 확인됨.
+- **실제 Upstage Solar API 연동 완성**: `app/agent/solar_llm.py`가 LiteLLM 경유로
+  Solar API를 호출한다. `RecommendationAgent`(`loop.py`) 기본값이 이 클래스이며,
+  `mock_llm.py`는 더 이상 프로덕션 경로에서 쓰이지 않고 테스트에서만
+  `RecommendationAgent(llm=MockLLM())`로 명시적으로 주입해 사용한다.
+- **`.env` 로딩 연결 완성**: 프로젝트 루트의 `.env`(gitignore됨)에 `UPSTAGE_API_KEY`를
+  넣으면 `solar_llm.py`가 `python-dotenv`로 자동 로딩한다. 팀원마다 각자 자신의
+  키를 넣으면 코드 변경 없이 동일하게 동작한다.
+- **흐름 검증 테스트 통과**: `python -m pytest tests/` (104개, 전부 MockLLM 기반이라
+  네트워크·API 키 없이 빠르게 실행됨).
 
 ## 파일 지도
 
@@ -36,16 +36,19 @@ app/
   services/
     scoring.py     # 결정론적 계산: 분위수 정규화·스코어링·순위 (LLM 없음, 핵심 로직)
   agent/
-    mock_llm.py    # ★ 가짜 LLM. 여기를 Upstage Solar API로 교체 ★
+    solar_llm.py   # ★ 프로덕션 기본 LLM. Upstage Solar API를 LiteLLM 경유로 호출 ★
+    mock_llm.py    # 키워드 매칭 스텁. 이제는 테스트 전용(RecommendationAgent(llm=MockLLM()))
     tools.py       # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py        # ReAct 흐름 오케스트레이터 (입구→백엔드→출구, 되묻기)
   data/
-    csv_repository.py  # dong_metrics.csv를 읽어 DongRawMetrics로 공급
+    csv_repository.py       # dong_metrics.csv를 읽어 DongRawMetrics로 공급
+    facility_repository.py  # 임의 업종(상가업소) 조회 — dataset/ 원본 CSV 필요
 build_dong_metrics.py  # 원본 CSV → dong_metrics.csv 생성 (파이프라인)
 dong_metrics.csv       # 행정동 지표 테이블 (빌더 산출물)
 seoul_gu.geojson       # 자치구 경계 (참고용)
-demo.py                # 시나리오 데모 실행
-tests/test_flow.py     # 흐름 검증
+demo.py                # 시나리오 데모 실행 (실제 Solar API 사용, .env 필요)
+.env                   # UPSTAGE_API_KEY 등 (gitignore됨, 각자 로컬에 개별 생성)
+tests/test_flow.py     # 흐름 검증 (MockLLM 명시 주입)
 ```
 
 ## 절대 바꾸면 안 되는 설계 원칙 (이유 포함)
@@ -87,30 +90,31 @@ tests/test_flow.py     # 흐름 검증
 
 ## 다음 할 일 (우선순위 순)
 
-1. **[최우선] mock_llm.py → Upstage Solar API 교체.** LiteLLM 경유 Solar 호출.
-   - parse_intent: 문장 → CategoryPreference 라벨 JSON (temperature 낮게, 스키마 강제)
-   - explain: 추천지 수치 → 근거 설명 (제공 수치만 사용 제약)
-   - 파싱 실패 시 폴백(균등분배)·합=1 정규화는 유지.
-   - 키워드 매칭 mock과 스위칭 가능하게 두면 키 없을 때도 개발 가능.
+1. **SSE 스트리밍 응답 구현.** 지금은 `explain()`이 완성된 문자열을 한 번에
+   반환. `_call()`을 `stream=True`로 바꾸고 토큰 단위로 흘려보낼 통로(컨트롤러)가 필요.
 2. **FastAPI 컨트롤러(main.py) 추가.** 지금 컨트롤러 계층이 없고 demo.py가 대신함.
-   HTTP 요청 → RecommendationAgent 호출 → 응답. 레이어의 마지막 조각.
-3. **반경 1km 적절성 검증.** 큰 행정동(진관동·상계동)에서 부족할 수 있음.
+   HTTP 요청 → RecommendationAgent 호출 → (1번의) SSE 응답. 레이어의 마지막 조각.
+3. **실패 케이스 처리.** Solar API 호출 실패/타임아웃 시 에러 메시지·재시도.
+   아래 트러블슈팅의 "일시적 Connection error" 참고.
+4. **반경 1km 적절성 검증.** 큰 행정동(진관동·상계동)에서 부족할 수 있음.
    시설별 다른 반경(편의점 500m, 병원 1.5km) 실험.
-4. **최소 UI (Streamlit 등)** + **GCP 배포** ($300 크레딧). MVP 마무리.
+5. **최소 UI (Streamlit 등)** + **GCP 배포** ($300 크레딧). MVP 마무리.
 
 ## 실행 방법
 
 ```bash
-pip install pydantic scipy numpy pyproj  # 의존성
-python demo.py                # 시나리오 데모
-python -m tests.test_flow     # 흐름 검증
-python -m pytest tests/       # 전체 유닛테스트 (scoring/schemas/mock_llm/solar_llm/agent/csv)
-python build_dong_metrics.py  # 지표 테이블 재생성 (원본 CSV 필요)
+pip install -r requirements.txt   # litellm 포함, Python 3.9+ 필요
+python demo.py                    # 시나리오 데모 (실제 Solar API, .env 필요)
+python -m pytest tests/           # 전체 유닛테스트 (MockLLM 기반, 키 없이도 실행됨)
+python build_dong_metrics.py      # 지표 테이블 재생성 (원본 CSV 필요)
 ```
 
-주의: `build_dong_metrics.py`는 원본 공공데이터 CSV들이 `/mnt/user-data/uploads`
-경로에 있어야 동작한다. 로컬에서 돌리려면 그 CSV들을 확보하고 경로를 수정할 것.
-`dong_metrics.csv`는 이미 생성돼 있으므로, 앱만 돌릴 거면 빌더는 실행 불필요.
+`.env`(프로젝트 루트, gitignore됨)에 `UPSTAGE_API_KEY=본인의_키`를 넣어야
+`demo.py`가 동작한다. 없으면 `solar_llm.py`의 `_call()`이 `RuntimeError`로
+바로 실패한다 (mock으로 돌리려면 `RecommendationAgent(llm=MockLLM())`로 직접 교체).
+
+주의: `build_dong_metrics.py`는 원본 공공데이터 CSV들이 `dataset/` 아래 있어야
+동작한다. `dong_metrics.csv`는 이미 생성돼 있으므로, 앱만 돌릴 거면 빌더는 실행 불필요.
 
 ## 알려진 한계 / 주의
 
@@ -119,3 +123,62 @@ python build_dong_metrics.py  # 지표 테이블 재생성 (원본 CSV 필요)
   거대 행정동(최대 12.7km²)은 중심점 근사 오차가 큼.
 - CCTV 좌표 컬럼명은 `WGS84위도`/`WGS84경도` (다른 파일과 다름, 빌더에 반영됨).
 - 좌표계: 시설은 위경도(4326), 행정동 중심점은 TM(5181). 빌더가 5181로 통일.
+
+## 트러블슈팅 (Solar API 연동 작업 중 실제로 겪은 것들)
+
+- **`pip install litellm`이 안 됨 (Python 3.8 환경)**: litellm의 의존 패키지가
+  Python 3.9+를 요구한다. `.venv`를 3.9 이상으로 재생성해야 한다.
+- **`parse_intent` 호출 시 `FileNotFoundError` (dataset 관련)**: `solar_llm.py`의
+  `_build_parse_system()`이 `extra_categories` 후보 목록을 만들려고 매번
+  `get_facility_repository()`를 호출하는데, 이건 `dataset/소상공인시장진흥공단_상가(상권)정보_서울.csv`
+  (원본, 용량 커서 gitignore)가 있어야 한다. **mock과 달리 Solar API는 이 파일 없이는
+  parse_intent 자체가 안 된다** — 서울 열린데이터광장에서 받아 `dataset/`에 넣을 것.
+- **지표 방향성을 LLM이 헷갈림 (발견 후 수정 완료)**: 초기 프롬프트에선 `explain`이
+  실제 순위는 맞게 계산하면서도, 부연 설명에서 "지하철 접근성은 0에 가까울수록
+  가깝다"처럼 **방향을 반대로 서술**하는 경우가 있었다(`subway_access`는 1에
+  가까울수록 좋음). `_EXPLAIN_SYSTEM`에 지표별 방향성(범죄율은 낮을수록,
+  개수형은 많을수록, `subway_access`는 1에 가까울수록 좋음)을 명시적으로 못박아
+  해결함. 비슷한 지표를 추가할 땐 방향성을 프롬프트에 같이 못박을 것.
+- **LiteLLM 경유 호출이 가끔 `InternalServerError: Connection error`**: 재시도하면
+  바로 성공하는 일시적 현상 (재현 안 됨, 원인 미확정 — 네트워크 hiccup 추정).
+  프로덕션에선 이런 순간적 실패에 대비한 재시도 로직이 필요함 (다음 할 일 3번).
+- **모델 매핑 경고 로그**: `solar-pro2-251215`가 LiteLLM의
+  `model_prices_and_context_window.json`에 없어 `Error getting model info: This
+  model isn't mapped yet` 경고가 뜬다. 비용 계산용 메타데이터가 없다는 뜻일 뿐
+  실제 호출·응답에는 영향 없음 (무시해도 됨).
+
+## 시나리오 재현 방법 (직접 확인하고 싶을 때)
+
+```bash
+source .venv/bin/activate
+python demo.py
+```
+
+`demo.py`가 아래 4개 시나리오를 실제 Solar API로 순서대로 실행하고, 각 시나리오의
+`[ReAct trace]`(parse_intent 결과·가중치·top 후보)까지 함께 출력한다:
+
+1. 메인 — 이동·안전 중시 ("야근이 잦고 차가 없어서...")
+2. 필수조건 — 대형병원
+3. 되묻기 — 성향 모호
+4. 임의 업종 — 버거·헬스장 (extra_categories 반영 확인용)
+
+특정 문장 하나만 빠르게 찍어보고 싶다면:
+
+```bash
+python -c "
+from app.agent.loop import RecommendationAgent
+res = RecommendationAgent().run('여기에 테스트할 문장')
+print(res.message)
+"
+```
+
+mock으로 실행하고 싶으면(키 없이, 결정론적으로):
+
+```bash
+python -c "
+from app.agent.loop import RecommendationAgent
+from app.agent.mock_llm import MockLLM
+res = RecommendationAgent(llm=MockLLM()).run('여기에 테스트할 문장')
+print(res.message)
+"
+```

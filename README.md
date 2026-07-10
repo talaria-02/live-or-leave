@@ -41,8 +41,8 @@ app/
   services/
     scoring.py       # 결정론적 계산: 분위수 정규화·스코어링·순위 (LLM 없음, 핵심 로직)
   agent/
-    mock_llm.py      # 규칙 기반 스텁 LLM (개발/테스트용, 기본값)
-    solar_llm.py     # Upstage Solar API 어댑터 (LiteLLM 경유, .env의 UPSTAGE_API_KEY 사용)
+    solar_llm.py     # 프로덕션 기본 LLM. Upstage Solar API 어댑터 (LiteLLM 경유, .env의 UPSTAGE_API_KEY 사용)
+    mock_llm.py      # 규칙 기반 스텁 LLM (테스트 전용, RecommendationAgent(llm=MockLLM())로 주입)
     tools.py         # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py          # ReAct 흐름 오케스트레이터 (입구→도구→출구, 되묻기 1회)
   data/
@@ -68,25 +68,27 @@ CSV들을 별도로 확보해 `python build_dong_metrics.py`를 실행해야 합
 
 Python 3.9 이상이 필요합니다 (LiteLLM 의존성 때문).
 
-### 실제 Upstage Solar API 연동 (선택)
+### Upstage Solar API 키 설정 (필수)
 
-프로젝트 루트에 `.env` 파일을 만들고 아래처럼 키를 넣으면, `RecommendationAgent`가
-자동으로 mock 대신 실제 Solar API를 사용합니다 (`.env`는 `.gitignore`에 등록돼
-있어 커밋되지 않습니다). 팀원마다 각자 자신의 키를 넣으면 동일하게 동작합니다.
+`RecommendationAgent`(및 `demo.py`)는 기본적으로 실제 Upstage Solar API를
+사용합니다. 프로젝트 루트에 `.env` 파일을 만들고 아래처럼 키를 넣어야 동작합니다
+(`.env`는 `.gitignore`에 등록돼 있어 커밋되지 않습니다). 팀원마다 각자 자신의
+키를 넣으면 코드 변경 없이 동일하게 동작합니다.
 
 ```
 UPSTAGE_API_KEY=본인의_Upstage_API_키
 ```
 
-`.env`가 없거나 `UPSTAGE_API_KEY`가 비어 있으면 자동으로 `mock_llm.py`(키워드 기반
-스텁)로 동작하므로, 키 없이도 개발·테스트가 가능합니다.
+키 없이 결정론적으로 개발·테스트하고 싶으면 `RecommendationAgent(llm=MockLLM())`처럼
+명시적으로 mock을 주입하세요 (`tests/`가 이 방식을 씁니다 — 그래서 `pytest`는
+키 없이도 항상 빠르게 통과합니다).
 
 ## 지금 상태 / 다음 할 일
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
-  실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM 경유, `.env`의
-  `UPSTAGE_API_KEY` 유무로 mock과 자동 스위칭)
-- 다음: FastAPI 컨트롤러 추가 (현재는 `demo.py`가 대신 실행)
+  실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM 경유). `mock_llm.py`는
+  테스트 전용으로만 남아 있습니다.
+- 다음: SSE 스트리밍, FastAPI 컨트롤러 추가 (현재는 `demo.py`가 대신 실행)
 
 ## 데이터 출처
 
