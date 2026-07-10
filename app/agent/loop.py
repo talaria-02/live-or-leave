@@ -28,13 +28,16 @@ class AgentResult:
 
 
 class RecommendationAgent:
-    def __init__(self, max_steps: int = 4):
+    def __init__(self, llm=None, max_steps: int = 4):
         repo = CsvDongRepository()
-        self.llm = MockLLM()
+        self.llm = llm or MockLLM()
         self.tools = ToolExecutor(repo)
         self.max_steps = max_steps
 
-    def run(self, user_text: str) -> AgentResult:
+    def run(self, user_text: str, top_n: int = 3) -> AgentResult:
+        """top_n을 늘리면(예: 지도용 전체 스코어링) data에는 top_n개가 다 담기지만,
+        출구 LLM 설명(explain)은 항상 상위 3개만 근거로 삼는다 — 425개를 전부
+        자연어로 설명하는 건 낭비고 의미도 없다."""
         trace: list[str] = []
         steps = 0
 
@@ -63,17 +66,18 @@ class RecommendationAgent:
             require_large_hospital=intent.require_large_hospital,
             extra_categories=intent.extra_categories,
             required_categories=intent.required_categories,
-            top_n=3,
+            top_n=top_n,
         )
         result = self.tools.recommend(tool_args)
-        top = [r["gu"] for r in result["recommendations"]]
+        top = [r["gu"] for r in result["recommendations"][:3]]
         trace.append(f"[step {steps}] tool:recommend → weights={result['weights']} "
                      f"top={top}")
 
-        # --- 종합: 출구 LLM 근거 설명 ---
+        # --- 종합: 출구 LLM 근거 설명 (항상 상위 3개만) ---
         steps += 1
-        message = self.llm.explain(user_text, result)
-        trace.append(f"[step {steps}] explain → 근거 설명 생성 ({len(top)}건)")
+        explain_input = {**result, "recommendations": result["recommendations"][:3]}
+        message = self.llm.explain(user_text, explain_input)
+        trace.append(f"[step {steps}] explain → 근거 설명 생성 (상위 {len(top)}건)")
 
         return AgentResult(
             kind="recommendation", message=message, trace=trace, data=result
