@@ -1,6 +1,6 @@
-"""agent/hcx_llm.py 단위 테스트.
+"""agent/solar_llm.py 단위 테스트.
 
-_call()은 아직 미구현(NotImplementedError)이라 실제 HCX 응답을 받을 수 없다.
+_call()은 아직 미구현(NotImplementedError)이라 실제 Solar 응답을 받을 수 없다.
 parse_intent/explain의 파싱·폴백·전달 로직 자체는 _call의 반환값에만 의존하므로,
 monkeypatch로 _call을 대체해 그 로직을 _call 구현과 독립적으로 검증한다.
 """
@@ -10,17 +10,17 @@ import json
 
 import pytest
 
-from app.agent.hcx_llm import HcxLLM
+from app.agent.solar_llm import SolarLLM
 from app.schemas.tools import Importance
 
 
 def _stub_call(monkeypatch, response: str):
-    monkeypatch.setattr(HcxLLM, "_call", lambda self, system, user: response)
+    monkeypatch.setattr(SolarLLM, "_call", lambda self, system, user: response)
 
 
 def test_call_not_implemented_yet():
     with pytest.raises(NotImplementedError):
-        HcxLLM()._call("system", "user")
+        SolarLLM()._call("system", "user")
 
 
 # ---------- parse_intent: _call 자체가 실패하는 경우 (현재 상태) ----------
@@ -28,14 +28,14 @@ def test_call_not_implemented_yet():
 def test_parse_intent_propagates_when_call_raises():
     """_call 예외는 try/except 바깥에서 일어나므로 현재는 그대로 전파된다."""
     with pytest.raises(NotImplementedError):
-        HcxLLM().parse_intent("아무 문장")
+        SolarLLM().parse_intent("아무 문장")
 
 
 # ---------- parse_intent: _call은 성공했지만 응답이 잘못된 경우 ----------
 
 def test_parse_intent_falls_back_when_response_is_not_json(monkeypatch):
     _stub_call(monkeypatch, "이건 JSON이 아닙니다")
-    intent = HcxLLM().parse_intent("아무 문장")
+    intent = SolarLLM().parse_intent("아무 문장")
     assert intent.needs_clarification is True
     assert intent.clarify_question
     assert all(v == Importance.NONE for v in intent.preference.model_dump().values())
@@ -46,7 +46,7 @@ def test_parse_intent_falls_back_when_label_is_invalid(monkeypatch):
         "safety": "극단적으로중요", "convenience": "none",
         "mobility": "none", "environment": "none",
     }))
-    intent = HcxLLM().parse_intent("아무 문장")
+    intent = SolarLLM().parse_intent("아무 문장")
     assert intent.needs_clarification is True
 
 
@@ -59,7 +59,7 @@ def test_parse_intent_parses_valid_json_response(monkeypatch):
         "require_large_hospital": True,
         "needs_clarification": False, "clarify_question": None,
     }))
-    intent = HcxLLM().parse_intent("안전하고 대형병원 있는 곳")
+    intent = SolarLLM().parse_intent("안전하고 대형병원 있는 곳")
     assert intent.preference.safety == Importance.VERY_HIGH
     assert intent.preference.mobility == Importance.MEDIUM
     assert intent.require_large_hospital is True
@@ -71,7 +71,7 @@ def test_parse_intent_strips_markdown_code_fence(monkeypatch):
         "safety": "none", "convenience": "high",
         "mobility": "none", "environment": "none",
     }) + "\n```")
-    intent = HcxLLM().parse_intent("편의점 많은 곳")
+    intent = SolarLLM().parse_intent("편의점 많은 곳")
     assert intent.preference.convenience == Importance.HIGH
 
 
@@ -81,12 +81,12 @@ class _FakeFacilityRepo:
 
 
 def test_parse_intent_extracts_extra_categories_within_closed_set(monkeypatch):
-    monkeypatch.setattr("app.agent.hcx_llm.get_facility_repository", lambda: _FakeFacilityRepo())
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "extra_categories": ["버거", "존재하지않는업종"],
     }))
-    intent = HcxLLM().parse_intent("버거집 있는 곳")
+    intent = SolarLLM().parse_intent("버거집 있는 곳")
     assert intent.extra_categories == ["버거"]  # 닫힌 집합 밖은 걸러짐
 
 
@@ -94,7 +94,7 @@ def test_parse_intent_extracts_extra_categories_within_closed_set(monkeypatch):
 
 def test_explain_short_circuits_on_empty_recommendations():
     """추천이 비어 있으면 _call을 호출하지 않고 고정 문구를 반환해야 한다."""
-    msg = HcxLLM().explain("아무 문장", {"recommendations": []})
+    msg = SolarLLM().explain("아무 문장", {"recommendations": []})
     assert msg == "조건에 맞는 지역을 찾지 못했습니다."
 
 
@@ -109,12 +109,12 @@ def _fake_result() -> dict:
 def test_explain_propagates_call_failure_when_recommendations_exist():
     """explain은 parse_intent와 달리 _call 실패를 폴백 없이 그대로 전파한다 (현재 구현)."""
     with pytest.raises(NotImplementedError):
-        HcxLLM().explain("아무 문장", _fake_result())
+        SolarLLM().explain("아무 문장", _fake_result())
 
 
 def test_explain_returns_call_result_when_recommendations_exist(monkeypatch):
     _stub_call(monkeypatch, "생성된 설명 텍스트")
-    msg = HcxLLM().explain("아무 문장", _fake_result())
+    msg = SolarLLM().explain("아무 문장", _fake_result())
     assert msg == "생성된 설명 텍스트"
 
 
@@ -127,7 +127,7 @@ def test_explain_passes_weights_and_contributions_into_the_prompt(monkeypatch):
         captured["user"] = user
         return "설명"
 
-    monkeypatch.setattr(HcxLLM, "_call", fake_call)
+    monkeypatch.setattr(SolarLLM, "_call", fake_call)
     result = {
         "weights": {"safety": 1.0, "convenience": 0.0, "mobility": 0.0, "environment": 0.0},
         "recommendations": [{
@@ -137,7 +137,7 @@ def test_explain_passes_weights_and_contributions_into_the_prompt(monkeypatch):
                                     hosp_cnt=1, bus_cnt=1, subway_access=0.5, park_cnt=1)},
         }],
     }
-    HcxLLM().explain("안전한 곳", result)
+    SolarLLM().explain("안전한 곳", result)
     assert "safety" in captured["user"] and "0.9" in captured["user"]
     assert "기여도" in captured["system"]
 
@@ -149,7 +149,7 @@ def test_explain_includes_caveat_only_for_prioritized_categories(monkeypatch):
         captured["user"] = user
         return "설명"
 
-    monkeypatch.setattr(HcxLLM, "_call", fake_call)
+    monkeypatch.setattr(SolarLLM, "_call", fake_call)
     result = {
         "weights": {"safety": 1.0, "convenience": 0.0, "mobility": 0.0, "environment": 0.0},
         "recommendations": [{
@@ -159,7 +159,7 @@ def test_explain_includes_caveat_only_for_prioritized_categories(monkeypatch):
                                     hosp_cnt=1, bus_cnt=1, subway_access=0.5, park_cnt=1)},
         }],
     }
-    HcxLLM().explain("안전한 곳", result)
+    SolarLLM().explain("안전한 곳", result)
     assert "자치구 값을 공통 적용" in captured["user"]
     assert "최근접 역까지 거리" not in captured["user"]
 
@@ -171,7 +171,7 @@ def test_explain_includes_extra_facility_status_and_caveat(monkeypatch):
         captured["user"] = user
         return "설명"
 
-    monkeypatch.setattr(HcxLLM, "_call", fake_call)
+    monkeypatch.setattr(SolarLLM, "_call", fake_call)
     result = {
         "weights": {"safety": 0.0, "convenience": 0.0, "mobility": 0.0,
                     "environment": 0.0, "버거": 1.0},
@@ -183,6 +183,6 @@ def test_explain_includes_extra_facility_status_and_caveat(monkeypatch):
                                     hosp_cnt=1, bus_cnt=1, subway_access=0.5, park_cnt=1)},
         }],
     }
-    HcxLLM().explain("버거집 있는 곳", result)
+    SolarLLM().explain("버거집 있는 곳", result)
     assert "요청 업종 현황" in captured["user"]
     assert "행정동에 등록된 업소 수 기준" in captured["user"]

@@ -42,7 +42,7 @@ app/
     scoring.py       # 결정론적 계산: 분위수 정규화·스코어링·순위 (LLM 없음, 핵심 로직)
   agent/
     mock_llm.py      # 규칙 기반 스텁 LLM (개발/테스트용, 기본값)
-    hcx_llm.py       # HyperCLOVA X 어댑터 (스켈레톤, _call() 구현 대기 중)
+    solar_llm.py     # Upstage Solar API 어댑터 (스켈레톤, _call() 구현 대기 중)
     tools.py         # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py          # ReAct 흐름 오케스트레이터 (입구→도구→출구, 되묻기 1회)
   data/
@@ -70,7 +70,7 @@ CSV들을 별도로 확보해 `python build_dong_metrics.py`를 실행해야 합
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회
   (mock LLM 기준으로 흐름 전체 검증됨)
-- 다음: `mock_llm.py` → 실제 HyperCLOVA X 연동 (`hcx_llm.py`의 `_call()` 구현,
+- 다음: `mock_llm.py` → 실제 Upstage Solar API 연동 (`solar_llm.py`의 `_call()` 구현,
   LiteLLM 경유 예정)
 - 다음: FastAPI 컨트롤러 추가 (현재는 `demo.py`가 대신 실행)
 

@@ -21,10 +21,10 @@
 ## 지금 무엇이 가짜인가 (여기가 다음 작업)
 
 - **`app/agent/mock_llm.py`가 진짜 LLM이 아님**. "안전" 같은 글자를 세는 키워드
-  매칭으로 HCX를 흉내낸 스텁이다. 이걸 실제 HyperCLOVA X 호출로 교체하는 것이
+  매칭으로 실제 LLM을 흉내낸 스텁이다. 이걸 실제 Upstage Solar API 호출로 교체하는 것이
   가장 우선순위 높은 다음 작업.
 - 교체는 **이 파일 하나만** 바꾸면 된다. `parse_intent`와 `explain`의 시그니처를
-  유지한 채 내부를 HCX 호출로 바꾸면 나머지 계층은 불변. (레이어 분리의 목적)
+  유지한 채 내부를 Solar API 호출로 바꾸면 나머지 계층은 불변. (레이어 분리의 목적)
 
 ## 파일 지도
 
@@ -36,7 +36,7 @@ app/
   services/
     scoring.py     # 결정론적 계산: 분위수 정규화·스코어링·순위 (LLM 없음, 핵심 로직)
   agent/
-    mock_llm.py    # ★ 가짜 LLM. 여기를 HCX로 교체 ★
+    mock_llm.py    # ★ 가짜 LLM. 여기를 Upstage Solar API로 교체 ★
     tools.py       # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py        # ReAct 흐름 오케스트레이터 (입구→백엔드→출구, 되묻기)
   data/
@@ -87,7 +87,7 @@ tests/test_flow.py     # 흐름 검증
 
 ## 다음 할 일 (우선순위 순)
 
-1. **[최우선] mock_llm.py → HCX 교체.** LiteLLM 경유 HyperCLOVA X 호출.
+1. **[최우선] mock_llm.py → Upstage Solar API 교체.** LiteLLM 경유 Solar 호출.
    - parse_intent: 문장 → CategoryPreference 라벨 JSON (temperature 낮게, 스키마 강제)
    - explain: 추천지 수치 → 근거 설명 (제공 수치만 사용 제약)
    - 파싱 실패 시 폴백(균등분배)·합=1 정규화는 유지.
@@ -104,7 +104,7 @@ tests/test_flow.py     # 흐름 검증
 pip install pydantic scipy numpy pyproj  # 의존성
 python demo.py                # 시나리오 데모
 python -m tests.test_flow     # 흐름 검증
-python -m pytest tests/       # 전체 유닛테스트 (scoring/schemas/mock_llm/hcx_llm/agent/csv)
+python -m pytest tests/       # 전체 유닛테스트 (scoring/schemas/mock_llm/solar_llm/agent/csv)
 python build_dong_metrics.py  # 지표 테이블 재생성 (원본 CSV 필요)
 ```
 

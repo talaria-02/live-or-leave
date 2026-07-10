@@ -1,7 +1,7 @@
 """
-HyperCLOVA X LLM 어댑터 — mock_llm.py를 대체할 실제 구현 (스켈레톤).
+Upstage Solar API 어댑터 — mock_llm.py를 대체할 실제 구현 (스켈레톤).
 
-★ 미완성: HCX 호출 부분(_call)을 실제 LiteLLM 연동으로 채워야 함. ★
+★ 미완성: Solar 호출 부분(_call)을 실제 LiteLLM 연동으로 채워야 함. ★
 mock_llm.MockLLM과 동일한 인터페이스(parse_intent, explain)를 구현하므로,
 loop.py에서 MockLLM 대신 이 클래스를 주입하면 교체 완료.
 
@@ -23,7 +23,7 @@ from app.schemas.tools import (
     ParsedIntent,
 )
 
-# LiteLLM 경유 HCX. 실제 키·모델명은 환경변수로.
+# LiteLLM 경유 Upstage Solar API. 실제 키·모델명은 환경변수로.
 # import litellm
 
 _PARSE_SYSTEM_BASE = """사용자의 동네 선호를 분석해 아래 4개 카테고리의 중요도를
@@ -58,12 +58,12 @@ def _build_parse_system() -> str:
     return _PARSE_SYSTEM_BASE.replace("__CATEGORIES__", categories)
 
 
-class HcxLLM:
+class SolarLLM:
     def __init__(self, model: str | None = None):
-        self.model = model or os.environ.get("HCX_MODEL", "hyperclova-x")
+        self.model = model or os.environ.get("SOLAR_MODEL", "hyperclova-x")
 
     def _call(self, system: str, user: str) -> str:
-        """★ 채워야 함: LiteLLM으로 HCX 호출 후 텍스트 반환. ★"""
+        """★ 채워야 함: LiteLLM으로 Solar API 호출 후 텍스트 반환. ★"""
         # resp = litellm.completion(
         #     model=self.model,
         #     messages=[{"role": "system", "content": system},
@@ -71,7 +71,7 @@ class HcxLLM:
         #     temperature=0.1,  # 재현성 위해 낮게
         # )
         # return resp.choices[0].message.content
-        raise NotImplementedError("HCX 호출을 구현하세요 (LiteLLM 연동).")
+        raise NotImplementedError("Solar API 호출을 구현하세요 (LiteLLM 연동).")
 
     def parse_intent(self, text: str) -> ParsedIntent:
         raw = self._call(_build_parse_system(), text)
