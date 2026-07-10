@@ -5,6 +5,7 @@ pyproj>=3.5
 litellm>=1.0
 tenacity>=8.0  # litellm의 num_retries(재시도) 기능이 내부적으로 필요로 함
 python-dotenv>=1.0
+httpx>=0.27  # Kakao Local API (kakao_facility_repository.py)
 fastapi>=0.110
 uvicorn>=0.27
 # build_dong_boundaries.py (지도 GeoJSON 생성) 전용 의존성:

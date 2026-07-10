@@ -47,6 +47,8 @@ class RecommendationAgent:
         intent = self.llm.parse_intent(user_text)
         trace.append(f"[step {steps}] parse_intent → {intent.preference.model_dump()} "
                      f"(hospital={intent.require_large_hospital}, "
+                     f"required={intent.required_categories}, near={intent.required_near}, "
+                     f"extra={intent.extra_categories}, "
                      f"clarify={intent.needs_clarification})")
 
         # --- agentic 분기: 모호하면 되묻기로 종료 ---
@@ -67,6 +69,7 @@ class RecommendationAgent:
             require_large_hospital=intent.require_large_hospital,
             extra_categories=intent.extra_categories,
             required_categories=intent.required_categories,
+            required_near=intent.required_near,
             top_n=top_n,
         )
         result = self.tools.recommend(tool_args)
@@ -120,6 +123,7 @@ class RecommendationAgent:
                 require_large_hospital=intent.require_large_hospital,
                 extra_categories=intent.extra_categories,
                 required_categories=intent.required_categories,
+                required_near=intent.required_near,
                 top_n=3,
             )
             result = self.tools.recommend(tool_args)

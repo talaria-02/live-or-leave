@@ -57,6 +57,40 @@ def partition_by_required_categories(
     return qualified, disqualified
 
 
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """(lon, lat) 두 점 사이 대원거리(km)."""
+    from math import asin, cos, radians, sin, sqrt
+
+    lon1, lat1, lon2, lat2 = map(radians, (*a, *b))
+    h = sin((lat2 - lat1) / 2) ** 2 + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(h))
+
+
+def partition_by_proximity(
+    scores: list[DongScores],
+    landmarks: dict[str, tuple[float, float]],
+    centroids: dict[str, tuple[float, float]],
+    radius_km: float,
+) -> tuple[list[DongScores], list[dict]]:
+    """'서울대 근처' 류 거리 필수조건 — 모든 랜드마크에서 radius_km 이내
+    (동 중심점 기준)인 동만 통과. partition_by_required_categories와 동일한
+    (qualified, disqualified+사유) 반환 형태."""
+    qualified = []
+    disqualified = []
+    for s in scores:
+        c = centroids.get(s.code)
+        missing = [
+            f"{name} 근처({radius_km:g}km 이내) 아님"
+            for name, coord in landmarks.items()
+            if c is None or haversine_km(c, coord) > radius_km
+        ]
+        if missing:
+            disqualified.append({"scores": s, "missing": missing})
+        else:
+            qualified.append(s)
+    return qualified, disqualified
+
+
 def _percentile_norm(values: dict[str, float], invert: bool = False) -> dict[str, float]:
     """백분위 정규화 (0~1). invert=True면 낮을수록 1점."""
     items = sorted(values.items(), key=lambda x: x[1])

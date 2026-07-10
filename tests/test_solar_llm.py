@@ -180,6 +180,40 @@ def test_parse_intent_extracts_extra_categories_within_closed_set(monkeypatch):
     assert intent.extra_categories == ["버거"]  # 닫힌 집합 밖은 걸러짐
 
 
+def test_parse_intent_accepts_open_keywords_for_required_categories(monkeypatch):
+    """필수 업종은 extra와 달리 닫힌 집합 필터를 통과하지 않는다 — CSV 밖 시설
+    ('클라이밍장' 등)은 Kakao 좌표검색으로 해석되므로 열린 키워드 그대로 보존."""
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_categories": ["클라이밍장", " 도서관 ", "", "클라이밍장"],
+    }))
+    intent = SolarLLM().parse_intent("클라이밍장이랑 도서관 꼭 있어야 해요")
+    assert intent.required_categories == ["클라이밍장", "도서관"]  # 공백 정리·중복·빈값 제거
+
+
+def test_parse_intent_separates_required_near_from_required_categories(monkeypatch):
+    """'서울대 근처'는 거리 필터(required_near)로만 — LLM이 지시를 어기고
+    required_categories에도 중복시키면 코드가 걸러내야 한다 (이름 매칭
+    노이즈 필터가 되는 걸 방지)."""
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_categories": ["서울대", "클라이밍"],
+        "required_near": ["서울대"],
+    }))
+    intent = SolarLLM().parse_intent("서울대 근처에 클라이밍장 있는 곳")
+    assert intent.required_near == ["서울대"]
+    assert intent.required_categories == ["클라이밍"]  # 중복 제거됨
+
+
+def test_parse_intent_caps_required_categories_at_five(monkeypatch):
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_categories": [f"업종{i}" for i in range(10)],
+    }))
+    intent = SolarLLM().parse_intent("이것저것 다 필요해요")
+    assert len(intent.required_categories) == 5
+
+
 # ---------- explain ----------
 
 def test_explain_short_circuits_on_empty_recommendations():

@@ -11,12 +11,13 @@ from app.schemas.domain import DongRawMetrics
 
 
 @pytest.fixture(autouse=True)
-def _no_live_solar_calls(monkeypatch):
-    """UPSTAGE_API_KEY가 로컬 쉘에 있어도 테스트는 항상 MockLLM을 쓰게 강제한다.
-    (RecommendationAgent가 이 값 유무로 SolarLLM/MockLLM을 자동 선택하므로,
-    실수로 실제 API를 호출·과금하는 걸 막는다. test_solar_llm.py는 개별
-    테스트에서 monkeypatch.setenv로 필요할 때만 다시 설정한다.)"""
+def _no_live_api_calls(monkeypatch):
+    """실 API 키가 로컬 쉘/.env에 있어도 테스트가 실제 호출·과금하지 않게 강제한다.
+    (RecommendationAgent가 UPSTAGE 키 유무로 SolarLLM/MockLLM을 자동 선택하고,
+    KakaoFacilityRepository는 KAKAO 키 유무로 available()을 판단한다. 필요한
+    테스트만 monkeypatch.setenv로 개별 설정한다.)"""
     monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
 
 
 def _raw(code, dong, gu, **kw):

@@ -31,6 +31,25 @@ def test_recommend_applies_hospital_filter(sample_raws):
     result = executor.recommend(args)
     dongs = {r["dong"] for r in result["recommendations"]}
     assert "B동" not in dongs  # hosp_cnt=0인 B동은 제외되어야 함
+    # 조용히 사라지면 지도에 구멍이 뚫린다 — 실격 목록에 사유와 함께 보고돼야 함
+    assert result["disqualified"] == [
+        {"code": "B1", "gu": "강남구", "dong": "B동", "missing": ["대형병원"]}
+    ]
+
+
+def test_recommend_hospital_filter_falls_back_when_no_dong_qualifies(no_hospital_raws):
+    """전부 hosp_cnt=0이면 필터를 생략한다(기존 rank() 폴백과 동일) —
+    빈 추천보다는 병원 조건만 무시한 추천이 낫다는 기존 설계 유지."""
+    executor = ToolExecutor(FakeRepo(no_hospital_raws))
+    args = RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.VERY_HIGH, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        require_large_hospital=True, top_n=2,
+    )
+    result = executor.recommend(args)
+    assert len(result["recommendations"]) == 2  # 전 지역 실격 아님
+    assert "disqualified" not in result
 
 
 def test_compare_found(sample_raws):
@@ -47,16 +66,24 @@ def test_compare_missing_returns_error(sample_raws):
 
 
 class _FakeFacilityRepo:
+    """HybridFacilityRepository와 동일 인터페이스(count/resolvable)의 테스트 대역."""
+
     def __init__(self, table: dict[tuple[str, str, str], int]):
         self._table = table
 
     def count(self, gu: str, dong: str, category: str) -> int:
         return self._table.get((gu, dong, category), 0)
 
+    def resolvable(self, category: str) -> bool:
+        return True
+
+    def places_for(self, category: str):
+        return None  # CSV 출처 취급 (좌표 없음)
+
 
 def test_recommend_folds_extra_category_into_weights_and_ranking(monkeypatch, sample_raws):
     monkeypatch.setattr(
-        "app.agent.tools.get_facility_repository",
+        "app.agent.tools.get_hybrid_facility_repository",
         lambda: _FakeFacilityRepo({("강남구", "A동", "버거"): 5, ("서초구", "C동", "버거"): 1}),
     )
     executor = ToolExecutor(FakeRepo(sample_raws))
@@ -89,7 +116,7 @@ def test_recommend_applies_required_category_hard_filter_and_reports_disqualifie
     monkeypatch, sample_raws
 ):
     monkeypatch.setattr(
-        "app.agent.tools.get_facility_repository",
+        "app.agent.tools.get_hybrid_facility_repository",
         lambda: _FakeFacilityRepo({
             ("강남구", "A동", "헬스장"): 1,
             ("서초구", "C동", "헬스장"): 2,

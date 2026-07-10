@@ -10,6 +10,8 @@ Mock LLM — 실제 Solar API 호출을 대체하는 결정론적 스텁.
 """
 from __future__ import annotations
 
+import re
+
 from app.schemas.domain import CATEGORY_CAVEATS
 from app.schemas.tools import (
     CategoryPreference,
@@ -97,9 +99,14 @@ class MockLLM:
 
         extra = _match_facility_categories(optional_part)
         required = _match_facility_categories(required_part)
+        # "서울대 근처"류 거리 요구 — 필수 구역에서 "X 근처/가까이" 앞 단어를 장소명으로
+        required_near = list(dict.fromkeys(
+            m.group(1) for m in re.finditer(r"(\S+?)\s*(?:근처|가까이|인근)", required_part)
+        ))
 
-        # 4개 카테고리도 모호하고 선택/필수 업종도 없으면 성향 모호 → 되묻기
-        if all(v == Importance.NONE for v in labels.values()) and not extra and not required:
+        # 4개 카테고리도 모호하고 선택/필수 업종·장소도 없으면 성향 모호 → 되묻기
+        if (all(v == Importance.NONE for v in labels.values())
+                and not extra and not required and not required_near):
             return ParsedIntent(
                 preference=pref,
                 needs_clarification=True,
@@ -108,6 +115,7 @@ class MockLLM:
         return ParsedIntent(
             preference=pref, require_large_hospital=require_hosp,
             extra_categories=extra, required_categories=required,
+            required_near=required_near,
         )
 
     def explain(self, user_text: str, result: dict) -> str:

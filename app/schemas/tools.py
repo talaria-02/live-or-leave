@@ -54,8 +54,16 @@ class ParsedIntent(BaseModel):
     )
     required_categories: list[str] = Field(
         default_factory=list,
-        description="'필수'로 언급된 업종 — 점수화가 아니라 하드 필터. 반경 내 없으면 "
-        "그 동은 통째로 제외된다. extra_categories와 같은 닫힌 집합(상권업종소분류명)만 사용.",
+        description="'필수'로 언급된 업종·시설 — 점수화가 아니라 하드 필터. 해당 동에 "
+        "없으면 통째로 제외된다. 상권업종소분류명이 우선이지만, 목록 밖 시설"
+        "(예: '클라이밍장')은 열린 키워드로 허용 — Kakao 좌표검색으로 해석된다.",
+    )
+    required_near: list[str] = Field(
+        default_factory=list,
+        description="'서울대 근처'처럼 특정 장소 기준 거리 요구 — 장소명만 담는다. "
+        "업종 존재 필터(required_categories)와 다르다: 장소 좌표 1개를 찾아 "
+        "동 중심점과의 거리로 하드 필터한다. 이름 매칭 노이즈(예: '서울대'가 "
+        "들어간 학원 890곳)를 피하기 위한 별도 의미론.",
     )
     needs_clarification: bool = Field(
         default=False, description="성향이 모호해 되물어야 하면 True"
@@ -74,6 +82,7 @@ class RecommendTool(BaseModel):
     require_large_hospital: bool = False
     extra_categories: list[str] = Field(default_factory=list)
     required_categories: list[str] = Field(default_factory=list)
+    required_near: list[str] = Field(default_factory=list)
     top_n: int = Field(default=3, ge=1, le=500)
 
 

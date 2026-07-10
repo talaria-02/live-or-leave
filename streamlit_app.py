@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import asdict
 
 import pandas as pd
 import plotly.express as px
@@ -37,7 +38,8 @@ st.set_page_config(page_title="살래말래 — 행정동 추천", layout="wide"
 
 TOP_K1 = 10          # 진한초록으로 표시할 최상위 개수
 TOP_K2 = 20          # 연한초록으로 표시할 다음 개수
-BOTTOM_N = 10        # 비추천(빨강+보라) 총 개수 — 절반 저점수 / 절반 필수조건 미충족
+BOTTOM_N = 10        # 저점수(빨강) 표시 개수 기준. 필수조건 미충족(보라)은 개수 제한
+                     # 없이 전부 그린다 — 일부만 그리면 지도에 구멍이 뚫린다.
 
 TIER_COLORS = {
     "top1": "#1b5e20",
@@ -77,6 +79,27 @@ def _mock_llm_reason() -> str:
     if not os.environ.get("UPSTAGE_API_KEY"):
         return "UPSTAGE_API_KEY 없음"
     return "STREAMLIT_USE_MOCK_LLM 설정됨"
+
+
+# 추천 파이프라인(파싱·필터·스코어링) 코드가 바뀔 때마다 올린다.
+# st.cache_data는 함수 인자만 캐시 키로 쓰고 하위 모듈(tools/scoring/solar_llm)
+# 코드 변경은 감지하지 못하므로, 버전을 인자로 넘겨 낡은 결과를 무효화한다.
+PIPELINE_VERSION = 3  # v3: '근처' 거리 필터 + Kakao 원본 좌표 저장·지도 핀
+
+
+@st.cache_data(max_entries=128, show_spinner="추천 계산 중…")
+def run_agent_cached(combined: str, mock: bool, pipeline_version: int) -> dict:
+    """같은 입력 텍스트로는 LLM을 다시 호출하지 않는다.
+
+    Streamlit은 위젯 하나만 바뀌어도 스크립트 전체를 재실행하므로, 캐시가
+    없으면 무관한 rerun(예: 필수 입력 blur 후 선택 입력 blur)마다 동일 텍스트로
+    parse_intent+explain 2회씩 재호출된다. mock 여부를 키에 포함해 mock으로
+    받은 결과가 실 LLM 모드에서 재사용되는 일을 막는다.
+
+    반환은 AgentResult가 아니라 dict — st.cache_data는 반환값을 pickle하는데,
+    Streamlit의 모듈 핫리로드 아래에서는 커스텀 클래스 직렬화가 깨진다
+    (UnserializableReturnValueError). 평범한 dict/list/str만 남긴다."""
+    return asdict(load_agent().run(combined, top_n=500))
 
 
 @st.cache_data
@@ -123,7 +146,10 @@ def assign_tiers(recommendations: list[dict], disqualified: list[dict]) -> pd.Da
             "tier": tier, "hover": _hover_for_recommendation(rec),
         })
 
-    for d in disqualified[: BOTTOM_N // 2]:
+    # 실격 동은 전부 그린다 — 일부만 그리면 나머지가 지도에서 통째로 사라져
+    # 구멍이 뚫린다. 필수 필터 결과 수백 개가 실격될 수 있는데(예: 클라이밍장
+    # 없는 동 333개), 그 자체가 사용자에게 의미 있는 정보다.
+    for d in disqualified:
         rows.append({
             "code": d["code"], "gu": d["gu"], "dong": d["dong"],
             "tier": "disqualified", "hover": _hover_for_disqualified(d),
@@ -158,7 +184,18 @@ _HOVER_CSS = """
 """
 
 
-def render_map(df: pd.DataFrame, geojson: dict) -> None:
+POINT_STYLE = {
+    # 랜드마크("서울대 근처"의 기준점): 크고 눈에 띄는 별
+    "landmark": dict(symbol="star", size=18, color="#ffd600",
+                     line=dict(width=1.5, color="#212121")),
+    # Kakao로 해석된 필수 업종의 실제 위치들: 작은 파란 점
+    "facility": dict(symbol="circle", size=7, color="#1e88e5",
+                     line=dict(width=1, color="#ffffff")),
+}
+POINT_LABELS = {"landmark": "기준 장소", "facility": "필수 업종 위치"}
+
+
+def render_map(df: pd.DataFrame, geojson: dict, points: list[dict] | None = None) -> None:
     """마우스오버 시 폴리곤 자체가 밝아지며 흰 광택 테두리가 도는 효과는 순수
     CSS :hover로 구현한다 — 실제 DOM에 폴리곤별 <path>가 있는 SVG 렌더러
     (px.choropleth)에서만 가능하다 (WebGL/캔버스는 개별 요소가 없어 CSS를
@@ -187,6 +224,19 @@ def render_map(df: pd.DataFrame, geojson: dict) -> None:
             font=dict(color="white", size=14, family="Arial Black"),
         )
         trace.name = TIER_LABELS.get(trace.name, trace.name)
+    # Kakao 좌표 핀 — 필터가 실제로 어떤 위치를 근거로 걸렸는지 눈으로 검증용.
+    # choropleth 위에 겹쳐 그리므로 같은 geo 좌표계를 공유한다.
+    for kind in ("facility", "landmark"):  # 랜드마크가 위에 오도록 마지막에
+        pts = [p for p in (points or []) if p["kind"] == kind]
+        if pts:
+            fig.add_scattergeo(
+                lon=[p["lon"] for p in pts], lat=[p["lat"] for p in pts],
+                mode="markers", marker=POINT_STYLE[kind],
+                name=POINT_LABELS[kind],
+                text=[p["label"] for p in pts],
+                hovertemplate="%{text}<extra></extra>",
+                hoverlabel=dict(bgcolor="#263238", font=dict(color="white", size=13)),
+            )
     fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0), height=760,
@@ -217,20 +267,30 @@ def main() -> None:
             render_map(neutral_dataframe(geojson), geojson)
         return
 
-    agent = load_agent()
     combined = f"필수 요구사항: {required_text}\n선택 요구사항: {optional_text}"
-    result = agent.run(combined, top_n=500)
+    result = run_agent_cached(combined, using_mock_llm(), PIPELINE_VERSION)
 
-    if result.kind == "clarify":
-        message_slot.warning(result.message)
+    if result["kind"] == "clarify":
+        message_slot.warning(result["message"])
         with col_map:
             render_map(neutral_dataframe(geojson), geojson)
         return
 
-    message_slot.success(result.message)
-    df = assign_tiers(result.data["recommendations"], result.data.get("disqualified", []))
+    message_slot.success(result["message"])
+    data = result["data"]
+    if data.get("unresolved_requirements"):
+        st.warning("해석하지 못한 필수 조건 (필터 미적용): "
+                   + ", ".join(data["unresolved_requirements"]))
+    df = assign_tiers(data["recommendations"], data.get("disqualified", []))
     with col_map:
-        render_map(df, geojson)
+        render_map(df, geojson, points=data.get("map_points"))
+
+    with col_input, st.expander("🔍 적용된 필터 검증"):
+        st.caption(f"추천 {len(data['recommendations'])}개 / "
+                   f"실격 {len(data.get('disqualified', []))}개 "
+                   f"(파이프라인 v{PIPELINE_VERSION})")
+        for line in result["trace"]:
+            st.text(line)
 
 
 if __name__ == "__main__":
