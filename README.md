@@ -108,7 +108,8 @@ UPSTAGE_API_KEY=본인의_Upstage_API_키
   필수조건 하드필터(`required_categories`), 실제 Upstage Solar API 연동
   (`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`),
   재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`).
-- 다음: 반경 1km 적절성 검증, GCP 배포.
+- 다음(Day4): Docker 컨테이너화 + GCE 배포(FE 포함), GitHub Actions CI/CD,
+  Nemotron-Personas-Korea 기반 핵심 시나리오 30개 검증.
 
 자세한 트러블슈팅·재현 방법·설계 원칙은 [HANDOFF.md](HANDOFF.md)를 참고하세요.
 
