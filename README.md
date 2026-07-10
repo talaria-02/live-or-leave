@@ -49,10 +49,13 @@ app/
   data/
     csv_repository.py       # dong_metrics.csv 로더
     facility_repository.py  # 임의 업종(상가업소) 조회, 프로세스 수명 동안 캐시
-build_dong_metrics.py  # 원본 공공데이터 → dong_metrics.csv 생성 파이프라인
-dong_metrics.csv       # 행정동 424개 지표 테이블 (커밋됨, 앱 실행에 바로 필요)
-demo.py                # 시나리오 데모 실행
-tests/                 # pytest 118개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)
+build_dong_metrics.py     # 원본 공공데이터 → dong_metrics.csv 생성 파이프라인
+build_dong_boundaries.py  # 원본 shapefile → dong_boundaries.geojson 생성 (지도 UI용)
+dong_metrics.csv          # 행정동 424개 지표 테이블 (커밋됨, 앱 실행에 바로 필요)
+dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 커밋됨)
+demo.py                   # 시나리오 데모 실행
+streamlit_app.py          # 지도 UI (필수/선택 요구사항 입력 → 실시간 티어링 지도)
+tests/                    # pytest 128개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)
 ```
 
 ## 실행 방법
@@ -69,6 +72,13 @@ python -m pytest tests/       # 전체 테스트
 ```bash
 curl -N --get "http://127.0.0.1:8000/recommend" \
   --data-urlencode "text=야근이 잦고 차가 없어서 지하철이 중요해. 밤에 안전한 동네였으면 좋겠어."
+```
+
+지도 UI 실행:
+
+```bash
+streamlit run streamlit_app.py                          # 기본값: 실제 Solar API (실제 시연용)
+STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # mock (레이아웃·색깔 등 빠른 반복 확인용)
 ```
 
 `dong_metrics.csv`는 이미 커밋돼 있어 위 명령만으로 바로 동작합니다. 원본 공공데이터
@@ -95,9 +105,10 @@ UPSTAGE_API_KEY=본인의_Upstage_API_키
 ## 지금 상태 / 다음 할 일
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
-  실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM 경유, `mock_llm.py`는 테스트
-  전용), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`), 재시도를 포함한 실패 처리.
-- 다음: 반경 1km 적절성 검증, 최소 UI + GCP 배포.
+  필수조건 하드필터(`required_categories`), 실제 Upstage Solar API 연동
+  (`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`),
+  재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`).
+- 다음: 반경 1km 적절성 검증, GCP 배포.
 
 자세한 트러블슈팅·재현 방법·설계 원칙은 [HANDOFF.md](HANDOFF.md)를 참고하세요.
 

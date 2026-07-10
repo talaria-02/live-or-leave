@@ -23,9 +23,6 @@
 - **`.env` 로딩 연결 완성**: 프로젝트 루트의 `.env`(gitignore됨)에 `UPSTAGE_API_KEY`를
   넣으면 `solar_llm.py`가 `python-dotenv`로 자동 로딩한다. 팀원마다 각자 자신의
   키를 넣으면 코드 변경 없이 동일하게 동작한다.
-- **`.env` 로딩 연결 완성**: 프로젝트 루트의 `.env`(gitignore됨)에 `UPSTAGE_API_KEY`를
-  넣으면 `solar_llm.py`가 `python-dotenv`로 자동 로딩한다. 팀원마다 각자 자신의
-  키를 넣으면 코드 변경 없이 동일하게 동작한다.
 - **SSE 스트리밍 + FastAPI 컨트롤러 완성**: `main.py`의 `GET /recommend`가
   `RecommendationAgent.stream()`을 호출해 근거 설명을 토큰 단위로 SSE 전송한다.
   `uvicorn main:app --reload`로 실행, curl로 직접 확인 가능(아래 재현 방법 참고).
@@ -33,7 +30,13 @@
   연결 실패를 자동 재시도. 그래도 실패하면(예: 잘못된 키) SSE로 이미 응답이
   시작된 상태이므로 HTTP 에러 대신 `{"type": "error", "message": ...}` 이벤트로
   실패를 알린다 (`RecommendationAgent.stream()`이 예외를 절대 밖으로 던지지 않음).
-- **흐름 검증 테스트 통과**: `python -m pytest tests/` (118개, 전부 MockLLM 기반이라
+- **Streamlit 지도 UI + 필수조건 하드필터 완성**: `streamlit_app.py`가 서울 425개
+  행정동을 지도에 5단계(상위/차상위/저점수/필수조건미충족/중립)로 색칠해 보여준다.
+  "필수 요구사항"(하드 필터, `required_categories`)과 "선택 요구사항"(점수 반영,
+  기존 흐름)을 분리 입력받는다. 입력이 바뀔 때마다 자동으로 다시 계산된다
+  (Streamlit 기본 동작). `build_dong_boundaries.py`가 원본 shapefile을
+  `dong_boundaries.geojson`(425개 동, 커밋됨)으로 미리 변환해둔다.
+- **흐름 검증 테스트 통과**: `python -m pytest tests/` (128개, 전부 MockLLM 기반이라
   네트워크·API 키 없이 빠르게 실행됨).
 
 ## 파일 지도
@@ -54,13 +57,16 @@ app/
   data/
     csv_repository.py       # dong_metrics.csv를 읽어 DongRawMetrics로 공급
     facility_repository.py  # 임의 업종(상가업소) 조회 — dataset/ 원본 CSV 필요
-build_dong_metrics.py  # 원본 CSV → dong_metrics.csv 생성 (파이프라인)
-dong_metrics.csv       # 행정동 지표 테이블 (빌더 산출물)
-seoul_gu.geojson       # 자치구 경계 (참고용)
-demo.py                # 시나리오 데모 실행 (실제 Solar API 사용, .env 필요)
-.env                   # UPSTAGE_API_KEY 등 (gitignore됨, 각자 로컬에 개별 생성)
-tests/test_main.py     # FastAPI 컨트롤러 테스트 (TestClient, MockLLM으로 의존성 오버라이드)
-tests/test_flow.py     # 흐름 검증 (MockLLM 명시 주입)
+build_dong_metrics.py     # 원본 CSV → dong_metrics.csv 생성 (파이프라인)
+build_dong_boundaries.py  # 원본 shapefile → dong_boundaries.geojson 생성 (지도용, 간략화 포함)
+dong_metrics.csv          # 행정동 지표 테이블 (빌더 산출물)
+dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 빌더 산출물, 커밋됨)
+seoul_gu.geojson          # 자치구 경계 (참고용)
+demo.py                   # 시나리오 데모 실행 (실제 Solar API 사용, .env 필요)
+streamlit_app.py          # 지도 UI. 기본값 Solar, STREAMLIT_USE_MOCK_LLM=1이면 mock
+.env                      # UPSTAGE_API_KEY 등 (gitignore됨, 각자 로컬에 개별 생성)
+tests/test_main.py        # FastAPI 컨트롤러 테스트 (TestClient, MockLLM으로 의존성 오버라이드)
+tests/test_flow.py        # 흐름 검증 (MockLLM 명시 주입)
 ```
 
 ## 절대 바꾸면 안 되는 설계 원칙 (이유 포함)
@@ -104,9 +110,8 @@ tests/test_flow.py     # 흐름 검증 (MockLLM 명시 주입)
 
 1. **반경 1km 적절성 검증.** 큰 행정동(진관동·상계동)에서 부족할 수 있음.
    시설별 다른 반경(편의점 500m, 병원 1.5km) 실험.
-2. **최소 UI (Streamlit 등)** + **GCP 배포** ($300 크레딧). MVP 마무리.
-   `main.py`가 이미 SSE로 응답하므로 프론트는 `EventSource`/`fetch` 스트림
-   리더로 바로 붙이면 된다.
+2. **GCP 배포** ($300 크레딧). MVP 마무리. `main.py`(FastAPI+SSE)와
+   `streamlit_app.py`(지도 UI) 둘 다 완성된 상태 — 뭘 배포할지/둘 다 배포할지 결정 필요.
 3. **(여유 있으면) 실패 케이스 처리 고도화.** 지금은 `num_retries=2`로 초기
    연결 실패만 자동 재시도한다. 스트리밍 도중 끊기는 경우(청크 일부만 받고
    중단)에 대한 재개 로직은 아직 없음 — MVP 범위에선 우선순위 낮음.
@@ -213,3 +218,15 @@ curl -N --get "http://127.0.0.1:8000/recommend" \
 `meta.kind`가 `"clarify"`로 바뀌고 delta 1개 + done만 온다. `.env`의 키를 일부러
 틀리게 바꿔서 테스트하면 `{"type": "error", "message": "..."}`가 오는 것도 확인 가능
 (서버가 죽지 않고 SSE로 에러를 전달함).
+
+### 지도 UI(streamlit_app.py) 직접 확인하기
+
+```bash
+streamlit run streamlit_app.py                       # 기본값: 실제 Solar API
+STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # 빠른 반복 작업용: mock
+```
+
+실제 시연 때는 위쪽(Solar) 그대로 쓰면 된다. 다만 이 UI는 입력창 값이 바뀔 때마다
+(포커스 아웃/Ctrl+Enter) `parse_intent`+`explain` 2회를 다시 호출하는 구조라,
+색깔·레이아웃만 반복해서 확인할 땐 `STREAMLIT_USE_MOCK_LLM=1`로 켜서 즉시 반응하는
+mock으로 돌리는 게 편하다 (무료·결정론적·키 불필요).

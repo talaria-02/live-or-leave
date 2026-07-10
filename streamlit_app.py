@@ -14,16 +14,22 @@ result.message(상위 3개 자연어 설명) 하나에만 관여한다 (agent.ru
 그대로 쓴 것이다. text_area는 매 타이핑이 아니라 포커스를 잃을 때(블러) 또는
 Ctrl+Enter일 때 값이 갱신된다 — 진짜 키 입력마다 갱신하려면 별도 프론트엔드
 작업이 필요하다.
+
+기본값은 실제 Solar API다 (재입력할 때마다 parse_intent+explain 2회 호출).
+레이아웃·색깔 확인처럼 빠른 반복 작업만 할 땐 아래로 mock으로 전환:
+    STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py
 """
 from __future__ import annotations
 
 import json
+import os
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from app.agent.loop import RecommendationAgent
+from app.agent.mock_llm import MockLLM
 
 st.set_page_config(page_title="살래말래 — 행정동 추천", layout="wide")
 
@@ -49,6 +55,8 @@ TIER_LABELS = {
 
 @st.cache_resource
 def load_agent() -> RecommendationAgent:
+    if os.environ.get("STREAMLIT_USE_MOCK_LLM"):
+        return RecommendationAgent(llm=MockLLM())
     return RecommendationAgent()
 
 
