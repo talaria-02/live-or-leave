@@ -49,8 +49,13 @@ class ParsedIntent(BaseModel):
     )
     extra_categories: list[str] = Field(
         default_factory=list,
-        description="'버거집', '헬스장' 같이 4개 카테고리 밖에서 언급된 업종 — "
-        "실제 존재하는 상권업종소분류명 문자열로만 채운다 (자유 생성 금지)",
+        description="'버거집', '헬스장' 같이 4개 카테고리 밖에서 '선택'으로 언급된 업종 — "
+        "점수에 반영(가중치 참여). 실제 존재하는 상권업종소분류명 문자열로만 채운다 (자유 생성 금지)",
+    )
+    required_categories: list[str] = Field(
+        default_factory=list,
+        description="'필수'로 언급된 업종 — 점수화가 아니라 하드 필터. 반경 내 없으면 "
+        "그 동은 통째로 제외된다. extra_categories와 같은 닫힌 집합(상권업종소분류명)만 사용.",
     )
     needs_clarification: bool = Field(
         default=False, description="성향이 모호해 되물어야 하면 True"
@@ -68,7 +73,8 @@ class RecommendTool(BaseModel):
     preference: CategoryPreference
     require_large_hospital: bool = False
     extra_categories: list[str] = Field(default_factory=list)
-    top_n: int = Field(default=3, ge=1, le=25)
+    required_categories: list[str] = Field(default_factory=list)
+    top_n: int = Field(default=3, ge=1, le=500)
 
 
 class CompareTool(BaseModel):

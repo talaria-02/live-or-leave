@@ -83,3 +83,41 @@ def test_recommend_without_extra_categories_omits_extra_facilities_key(sample_ra
     )
     result = executor.recommend(args)
     assert "extra_facilities" not in result["recommendations"][0]
+
+
+def test_recommend_applies_required_category_hard_filter_and_reports_disqualified(
+    monkeypatch, sample_raws
+):
+    monkeypatch.setattr(
+        "app.agent.tools.get_facility_repository",
+        lambda: _FakeFacilityRepo({
+            ("강남구", "A동", "헬스장"): 1,
+            ("서초구", "C동", "헬스장"): 2,
+            # B동은 테이블에 없음 → 0으로 취급 → 실격
+        }),
+    )
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    args = RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.VERY_HIGH, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_categories=["헬스장"], top_n=3,
+    )
+    result = executor.recommend(args)
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert "B동" not in dongs  # 하드필터 통과 못 함
+    assert len(result["disqualified"]) == 1
+    assert result["disqualified"][0]["dong"] == "B동"
+    assert result["disqualified"][0]["missing"] == ["헬스장"]
+
+
+def test_recommend_without_required_categories_omits_disqualified_key(sample_raws):
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    args = RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.VERY_HIGH, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        top_n=1,
+    )
+    result = executor.recommend(args)
+    assert "disqualified" not in result

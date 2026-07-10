@@ -62,6 +62,7 @@ class RecommendationAgent:
             preference=intent.preference,
             require_large_hospital=intent.require_large_hospital,
             extra_categories=intent.extra_categories,
+            required_categories=intent.required_categories,
             top_n=3,
         )
         result = self.tools.recommend(tool_args)
