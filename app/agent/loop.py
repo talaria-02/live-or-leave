@@ -78,3 +78,56 @@ class RecommendationAgent:
         return AgentResult(
             kind="recommendation", message=message, trace=trace, data=result
         )
+
+    def stream(self, user_text: str):
+        """SSE 컨트롤러(main.py)용 제너레이터 버전의 run().
+
+        run()과 동일한 흐름(파싱→[되묻기]→도구→설명)을 따르되, 설명 단계를
+        토큰 단위 이벤트로 흘려보낸다. 실패해도 예외를 밖으로 던지지 않고
+        {"type": "error"} 이벤트로 알린다 — SSE는 응답이 이미 시작된 상태라
+        HTTP 상태 코드로는 실패를 표현할 수 없기 때문이다.
+
+        이벤트 종류: meta(kind/trace/[data]) → delta(text)* → done, 또는 error(message).
+        """
+        trace: list[str] = []
+        try:
+            steps = 1
+            intent = self.llm.parse_intent(user_text)
+            trace.append(f"[step {steps}] parse_intent → {intent.preference.model_dump()} "
+                         f"(hospital={intent.require_large_hospital}, "
+                         f"clarify={intent.needs_clarification})")
+
+            if intent.needs_clarification:
+                trace.append(f"[step {steps}] needs_clarification → 되묻기 반환")
+                yield {"type": "meta", "kind": "clarify", "trace": list(trace)}
+                yield {"type": "delta", "text": intent.clarify_question or "조금 더 구체적으로 알려주세요."}
+                yield {"type": "done"}
+                return
+
+            steps += 1
+            if steps > self.max_steps:
+                yield {"type": "meta", "kind": "clarify", "trace": list(trace)}
+                yield {"type": "delta", "text": "처리 한도를 초과했습니다."}
+                yield {"type": "done"}
+                return
+            tool_args = RecommendTool(
+                preference=intent.preference,
+                require_large_hospital=intent.require_large_hospital,
+                extra_categories=intent.extra_categories,
+                top_n=3,
+            )
+            result = self.tools.recommend(tool_args)
+            top = [r["gu"] for r in result["recommendations"]]
+            trace.append(f"[step {steps}] tool:recommend → weights={result['weights']} "
+                         f"top={top}")
+
+            steps += 1
+            trace.append(f"[step {steps}] explain_stream → 근거 설명 스트리밍 시작 ({len(top)}건)")
+            yield {"type": "meta", "kind": "recommendation", "trace": list(trace), "data": result}
+
+            for chunk in self.llm.explain_stream(user_text, result):
+                yield {"type": "delta", "text": chunk}
+
+            yield {"type": "done"}
+        except Exception as e:
+            yield {"type": "error", "message": str(e)}

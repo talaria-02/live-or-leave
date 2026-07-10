@@ -173,3 +173,18 @@ def test_explain_notes_extra_facility_counting_methodology():
 def test_explain_no_extra_facility_note_when_not_requested():
     msg = MockLLM().explain("안전한 곳", _fake_result(hosp_cnt=1))
     assert "등록된 업소 수 기준" not in msg
+
+
+# ---------- explain_stream (SSE 테스트용) ----------
+
+def test_explain_stream_reconstructs_same_text_as_explain():
+    result = _fake_result(hosp_cnt=1)
+    full = MockLLM().explain("조용한 동네", result)
+    streamed = "".join(MockLLM().explain_stream("조용한 동네", result))
+    assert streamed == full
+
+
+def test_explain_stream_yields_multiple_chunks_for_long_message():
+    result = _fake_result(hosp_cnt=1)
+    chunks = list(MockLLM().explain_stream("조용한 동네", result))
+    assert len(chunks) > 1

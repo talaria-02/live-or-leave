@@ -122,3 +122,11 @@ class MockLLM:
         if caveats:
             lines.append("[데이터 안내]\n" + "\n".join(f"※ {c}" for c in caveats))
         return "\n\n".join(lines)
+
+    def explain_stream(self, user_text: str, result: dict):
+        """SolarLLM.explain_stream과 동일한 인터페이스. 실제 스트리밍 없이
+        explain()의 결과를 공백 단위로 잘라 흉내낸다 (SSE 배선을 네트워크 없이 테스트하기 위함)."""
+        msg = self.explain(user_text, result)
+        words = msg.split(" ")
+        for i, word in enumerate(words):
+            yield word if i == len(words) - 1 else word + " "

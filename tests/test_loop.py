@@ -55,3 +55,44 @@ def test_trace_stops_after_clarification_without_calling_tool():
     joined = " ".join(result.trace)
     assert "needs_clarification" in joined
     assert "tool:recommend" not in joined
+
+
+# ---------- stream() — SSE 컨트롤러용 제너레이터 ----------
+
+def test_stream_clarify_yields_meta_then_delta_then_done():
+    events = list(_agent().stream("아무데나 좋은 곳"))
+    types_ = [e["type"] for e in events]
+    assert types_ == ["meta", "delta", "done"]
+    assert events[0]["kind"] == "clarify"
+    assert "data" not in events[0]
+    assert events[1]["text"]
+
+
+def test_stream_recommendation_yields_meta_with_data_then_deltas_then_done():
+    events = list(_agent().stream("안전하고 조용한 동네가 좋아요"))
+    assert events[0]["type"] == "meta"
+    assert events[0]["kind"] == "recommendation"
+    assert set(events[0]["data"].keys()) == {"weights", "recommendations"}
+    assert events[-1] == {"type": "done"}
+
+    delta_events = events[1:-1]
+    assert len(delta_events) > 1  # 여러 청크로 쪼개져서 옴 (토큰 스트리밍 확인)
+    assert all(e["type"] == "delta" for e in delta_events)
+
+
+def test_stream_recommendation_deltas_reconstruct_same_message_as_run():
+    text = "안전하고 조용한 동네가 좋아요"
+    run_result = _agent().run(text)
+    stream_events = list(_agent().stream(text))
+    streamed_text = "".join(e["text"] for e in stream_events if e["type"] == "delta")
+    assert streamed_text == run_result.message
+
+
+def test_stream_yields_error_event_instead_of_raising():
+    class _BrokenLLM:
+        def parse_intent(self, text):
+            raise ValueError("일부러 실패시킴")
+
+    agent = RecommendationAgent(llm=_BrokenLLM())
+    events = list(agent.stream("아무 문장"))
+    assert events == [{"type": "error", "message": "일부러 실패시킴"}]

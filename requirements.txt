@@ -3,7 +3,7 @@ scipy>=1.10
 numpy>=1.24
 pyproj>=3.5
 litellm>=1.0
+tenacity>=8.0  # litellm의 num_retries(재시도) 기능이 내부적으로 필요로 함
 python-dotenv>=1.0
-# FastAPI 컨트롤러 추가 시 필요:
-# fastapi>=0.110
-# uvicorn>=0.27
+fastapi>=0.110
+uvicorn>=0.27

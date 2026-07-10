@@ -55,6 +55,61 @@ def test_call_invokes_litellm_with_solar_openai_compatible_endpoint(monkeypatch)
         {"role": "system", "content": "system"},
         {"role": "user", "content": "user"},
     ]
+    assert captured["num_retries"] == 2  # 일시적 connection error 대비 재시도
+
+
+# ---------- _call_stream (SSE용) ----------
+
+def test_call_stream_raises_without_api_key(monkeypatch):
+    """제너레이터라 함수 호출 자체는 안 터지고, 반복(iterate)할 때 터진다."""
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    gen = SolarLLM()._call_stream("system", "user")
+    with pytest.raises(RuntimeError):
+        next(gen)
+
+
+def test_call_stream_yields_chunks_via_litellm(monkeypatch):
+    captured = {}
+
+    class _FakeDelta:
+        def __init__(self, content):
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content):
+            self.delta = _FakeDelta(content)
+
+    class _FakeChunk:
+        def __init__(self, content):
+            self.choices = [_FakeChoice(content)]
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        # 중간에 delta.content가 None인 청크(빈 하트비트 등)도 섞어서 걸러지는지 확인
+        return iter([_FakeChunk("안녕"), _FakeChunk(None), _FakeChunk("하세요")])
+
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(completion=fake_completion))
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+
+    chunks = list(SolarLLM()._call_stream("system", "user"))
+
+    assert chunks == ["안녕", "하세요"]
+    assert captured["stream"] is True
+    assert captured["num_retries"] == 2
+    assert captured["model"] == "openai/solar-pro2-251215"
+
+
+# ---------- explain_stream ----------
+
+def test_explain_stream_short_circuits_on_empty_recommendations():
+    chunks = list(SolarLLM().explain_stream("아무 문장", {"recommendations": []}))
+    assert chunks == ["조건에 맞는 지역을 찾지 못했습니다."]
+
+
+def test_explain_stream_yields_call_stream_chunks(monkeypatch):
+    monkeypatch.setattr(SolarLLM, "_call_stream", lambda self, system, user: iter(["a", "b", "c"]))
+    chunks = list(SolarLLM().explain_stream("아무 문장", _fake_result()))
+    assert chunks == ["a", "b", "c"]
 
 
 # ---------- parse_intent: _call 자체가 실패하는 경우 (예: API 키 미설정) ----------

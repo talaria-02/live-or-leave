@@ -95,8 +95,32 @@ class SolarLLM:
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             temperature=0.1,  # 재현성 위해 낮게
+            num_retries=2,  # 일시적 connection error 대비 (HANDOFF.md 트러블슈팅 참고)
         )
         return resp.choices[0].message.content
+
+    def _call_stream(self, system: str, user: str):
+        """explain_stream()용 토큰 스트리밍 호출. 제너레이터라 첫 next() 호출 전까지는
+        본문이 실행되지 않으므로, api_key 누락 에러도 실제 반복(iterate) 시점에 발생한다."""
+        if not self.api_key:
+            raise RuntimeError("UPSTAGE_API_KEY 환경변수가 설정되지 않았습니다.")
+
+        import litellm  # 지연 로딩: mock만 쓰는 환경에서는 패키지가 없어도 무방
+
+        response = litellm.completion(
+            model=f"openai/{self.model}",
+            api_base=self.api_base,
+            api_key=self.api_key,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            temperature=0.1,
+            num_retries=2,
+            stream=True,
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
     def parse_intent(self, text: str) -> ParsedIntent:
         raw = self._call(_build_parse_system(), text)
@@ -127,10 +151,11 @@ class SolarLLM:
                 clarify_question="어떤 점을 가장 중요하게 보세요? (안전/편의/교통/환경)",
             )
 
-    def explain(self, user_text: str, result: dict) -> str:
+    def _build_explain_prompt(self, user_text: str, result: dict) -> tuple[str, str] | None:
+        """explain/explain_stream 공용 프롬프트 빌더. 추천이 없으면 None(고정 문구로 대체)."""
         recs = result["recommendations"]
         if not recs:
-            return "조건에 맞는 지역을 찾지 못했습니다."
+            return None
         # 추천지 실제 수치 + 선택 근거(가중치·기여도)를 프롬프트에 담아 근거 강제
         weights = result.get("weights", {})
         priorities = [c for c, w in sorted(weights.items(), key=lambda x: -x[1]) if w > 0]
@@ -151,4 +176,18 @@ class SolarLLM:
                 f"병원 {raw['hosp_cnt']}, 버스 {raw['bus_cnt']}, "
                 f"지하철접근성 {raw['subway_access']}, 공원 {raw['park_cnt']}")
         user = f"사용자 요구: {user_text}\n추천지 지표:\n" + "\n".join(facts)
-        return self._call(_EXPLAIN_SYSTEM, user)
+        return _EXPLAIN_SYSTEM, user
+
+    def explain(self, user_text: str, result: dict) -> str:
+        prompt = self._build_explain_prompt(user_text, result)
+        if prompt is None:
+            return "조건에 맞는 지역을 찾지 못했습니다."
+        return self._call(*prompt)
+
+    def explain_stream(self, user_text: str, result: dict):
+        """SSE 컨트롤러용 토큰 스트리밍 버전. 청크(str)를 순서대로 yield한다."""
+        prompt = self._build_explain_prompt(user_text, result)
+        if prompt is None:
+            yield "조건에 맞는 지역을 찾지 못했습니다."
+            return
+        yield from self._call_stream(*prompt)
