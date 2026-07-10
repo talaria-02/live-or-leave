@@ -6,6 +6,7 @@ pyproj>=3.5
 pyshp>=3.1
 pandas>=2.0
 openpyxl>=3.1
+shapely>=2.0
 # streamlit_app.py (UI) 전용 의존성:
 streamlit>=1.38
 plotly>=5.24

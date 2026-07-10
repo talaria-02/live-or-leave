@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 import pyproj
 import shapefile
+from shapely.geometry import mapping, shape
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHP_PATH = PROJECT_ROOT / "space_info" / "BND_ADM_DONG_PG.shp"
@@ -30,6 +31,11 @@ PRJ_PATH = PROJECT_ROOT / "space_info" / "BND_ADM_DONG_PG.prj"
 CODE_TABLE_PATH = PROJECT_ROOT / "space_info" / "센서스 공간정보 지역 코드.xlsx"
 DONG_METRICS_PATH = PROJECT_ROOT / "dong_metrics.csv"
 OUTPUT_PATH = PROJECT_ROOT / "dong_boundaries.geojson"
+
+# 배포 시 매 렌더링마다 이 GeoJSON 전체가 브라우저로 전송·재렌더링되므로,
+# 원본(평균 481점/폴리곤)을 그대로 쓰면 느리다. 좌표계가 미터 단위(TM)일 때
+# 단순화해야 허용오차(m)를 직관적으로 잡을 수 있어 재투영 전에 수행한다.
+SIMPLIFY_TOLERANCE_M = 15.0
 
 # 서울시 상권분석서비스 원본 데이터 자체의 인코딩 손실("?") 보정 — shapefile의
 # 정확한 철자로 교체한다 (우리 파이프라인 버그가 아니라 원본 배포 시점의 손실).
@@ -67,6 +73,12 @@ def load_dong_rows() -> list[dict]:
             dong = NAME_FIXES.get(row["dong"], row["dong"])
             rows.append({"code": row["code"], "gu": row["gu"], "dong": dong})
     return rows
+
+
+def simplify_geometry(geo: dict, tolerance: float) -> dict:
+    """TM(미터) 좌표 상태에서 Douglas-Peucker 단순화. 위상(구멍 등)은 보존한다."""
+    simplified = shape(geo).simplify(tolerance, preserve_topology=True)
+    return mapping(simplified)
 
 
 def reproject_geometry(geo: dict, transformer: pyproj.Transformer) -> dict:
@@ -109,7 +121,8 @@ def main():
         key = (gu, sr.record["ADM_NM"])
         if key not in lookup:
             continue
-        geo = reproject_geometry(sr.shape.__geo_interface__, to_wgs84)
+        geo = simplify_geometry(sr.shape.__geo_interface__, SIMPLIFY_TOLERANCE_M)
+        geo = reproject_geometry(geo, to_wgs84)
         for r in lookup[key]:
             features.append({
                 "type": "Feature",
@@ -128,7 +141,16 @@ def main():
 
     fc = {"type": "FeatureCollection", "features": features}
     OUTPUT_PATH.write_text(json.dumps(fc, ensure_ascii=False), encoding="utf-8")
+
+    def _count_points(geo):
+        coords = geo["coordinates"]
+        if geo["type"] == "Polygon":
+            return sum(len(ring) for ring in coords)
+        return sum(len(ring) for poly in coords for ring in poly)
+
+    total_points = sum(_count_points(f["geometry"]) for f in features)
     print(f"완료: {OUTPUT_PATH} ({len(features)}개 피처, "
+          f"좌표점 {total_points}개(평균 {total_points / len(features):.0f}), "
           f"{OUTPUT_PATH.stat().st_size / 1024 / 1024:.1f}MB)")
 
 
