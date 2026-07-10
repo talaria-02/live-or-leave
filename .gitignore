@@ -1,0 +1,30 @@
+# 원본 공공데이터 (용량 큼, 재현 가능 — data.seoul.go.kr 등에서 재다운로드 가능)
+dataset/
+dataset.zip
+
+# 빌드 산출물 dong_metrics.csv는 예외로 커밋한다.
+# dataset/가 없어도 앱이 바로 돌아가야 하고(HANDOFF.md 참고), 파일 자체가 32KB로 작기 때문.
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# 환경변수/시크릿 (HCX API 키 등)
+.env
+.env.*
+
+# 에디터/도구별 로컬 설정
+.claude/settings.local.json
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
