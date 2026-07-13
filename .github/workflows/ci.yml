@@ -37,21 +37,3 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t live-or-leave:ci .
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: docker-build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - name: Deploy to GCE via SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.GCE_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 34.45.54.7 >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key jeong-yeongjun@34.45.54.7 '
-            cd ~/live-or-leave &&
-            git pull origin main &&
-            docker compose up -d --build
-          '
