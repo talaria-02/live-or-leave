@@ -80,6 +80,22 @@ def test_stream_recommendation_yields_meta_with_data_then_deltas_then_done():
     assert all(e["type"] == "delta" for e in delta_events)
 
 
+def test_stream_top_n_defaults_to_three():
+    events = list(_agent().stream("안전하고 조용한 동네가 좋아요"))
+    assert len(events[0]["data"]["recommendations"]) == 3
+
+
+def test_stream_top_n_expands_recommendations_but_explain_stays_on_top_three():
+    """top_n을 늘리면 data.recommendations는 다 담기지만, 설명은 run()과
+    마찬가지로 항상 상위 3개만 근거로 삼아야 한다(프롬프트 폭주 방지)."""
+    events = list(_agent().stream("안전하고 조용한 동네가 좋아요", top_n=50))
+    assert len(events[0]["data"]["recommendations"]) == 50
+
+    message = "".join(e["text"] for e in events if e["type"] == "delta")
+    run_message = _agent().run("안전하고 조용한 동네가 좋아요", top_n=50).message
+    assert message == run_message  # run()도 top_n=50이어도 설명은 상위 3개 기준
+
+
 def test_stream_recommendation_deltas_reconstruct_same_message_as_run():
     text = "안전하고 조용한 동네가 좋아요"
     run_result = _agent().run(text)

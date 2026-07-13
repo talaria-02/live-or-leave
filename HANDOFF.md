@@ -47,20 +47,39 @@
   이름 불일치 3종을 알고 처리함(자세한 근거는 스크립트 주석 참고):
   서울시 데이터 자체의 "·"→"?" 인코딩 손실 7건, 강동구 상일동(지도엔 1·2동으로
   분리), 강남구 일원2동(2023년 개편으로 개포3동에 편입).
-- **Streamlit UI 1차 완성**: `streamlit_app.py` — 왼쪽 지도(고정 표시, 서울 외
-  지역은 베이스맵 자체가 없어 안 보임)+오른쪽 필수/선택 입력, 텍스트 변경 시
-  자동 재계산(버튼 없음). 전체 스코어링(`RecommendationAgent.run(top_n=...)`)
-  결과를 상위/차상위(초록 2단계)·비추천(빨강, 저점수 절반+필수미충족 절반)·
-  그 외(회색)로 티어링. 마우스오버 시 CSS `:hover`로 폴리곤이 밝아지며
-  흰 글로우 효과(`px.choropleth`=SVG라 가능; WebGL/`choropleth_map`은 개별
-  폴리곤이 DOM 요소가 아니라서 이 효과를 못 건다 — 대신 지도가 커서 배포
-  시 렌더링 속도가 걱정되면 `choropleth_map`+`map_style="white-bg"`로
-  되돌리고 hover는 `hoverlabel` 색상 강조만 남기는 절충안 있음, git 히스토리
-  참고). `UPSTAGE_API_KEY` 없으면 자동으로 `MockLLM`으로 폴백하고 화면에 표시.
-  `STREAMLIT_USE_MOCK_LLM=1`로 키가 있어도 강제로 mock을 쓸 수 있다(레이아웃·
-  색깔만 빠르게 반복 확인할 때).
-- **흐름 검증 테스트 통과**: `python -m pytest tests/` (128개, 전부 MockLLM 기반이라
-  네트워크·API 키 없이 빠르게 실행됨).
+- **필수조건 열린 키워드 확장 완성 (Kakao Local API)**: 상가 CSV의 닫힌 집합
+  (247개 업종소분류)에 없는 필수 시설("클라이밍장", "도서관" 등)도 Kakao
+  키워드 검색으로 좌표를 받아 처리한다. `app/data/kakao_facility_repository.py`:
+  - `KakaoFacilityRepository` — 서울 bbox 검색(45건 초과 시 rect 4분할 재귀),
+    shapely point-in-polygon으로 좌표→행정동 매핑, 키워드별 디스크 캐시(TTL 7일,
+    원본 장소 좌표까지 함께 저장해 지도 핀·검증용으로 재사용).
+  - `required_near`(예: "서울대 근처") — 업종 존재 필터와는 다른 의미론. 장소
+    좌표 1개만 찾아 동 중심점과의 거리(`NEAR_RADIUS_KM`, 현재 3km)로 하드
+    필터한다. 이름 매칭(예: "서울대" 상호 890곳 매칭)과 섞으면 엉뚱한 동이
+    통과하는 버그가 났었음 — 그래서 분리.
+  - `HybridFacilityRepository` — CSV 보유 업종은 CSV 그대로(API 호출 0),
+    미보유 키워드만 Kakao로 폴백. 해석 불가(CSV에도 없고 API 키도 없음)한
+    필수조건은 조용히 전 지역을 실격시키는 대신 필터를 생략하고
+    `unresolved_requirements`로 보고한다.
+  - Kakao API 키 없어도 앱은 그대로 뜬다(그 기능만 비활성).
+- **Streamlit UI 전면 개편**: 화면 전체를 지도로 채우고(`px.choropleth_map`,
+  MapLibre 타일), 입력창은 우측에 반투명 오버레이 패널로 띄운다
+  (`position: fixed` + Streamlit 내부 DOM에 CSS로 직접 개입 — 아래 "알려진
+  한계" 참고). 지도 스타일은 위성사진/일반/어두움(기본값) 중 선택 가능.
+  서울 바깥은 전체를 어둡게 깔아(shapely로 "서울 아님" 마스크 폴리곤 계산)
+  서울만 도드라져 보이게 하는 스포트라이트 효과. 서울역·강남역·대형병원·
+  대학교 등 핵심시설 20곳을 고정 마커로 표시하고, Kakao로 찾은 필수 업종
+  위치·"근처" 기준 장소도 지도 위에 핀으로 찍어 필터 근거를 눈으로 검증할
+  수 있게 했다. 위젯(지도 스타일 변경 등) 하나 누를 때마다 스크립트
+  전체가 재실행되던 걸 `@st.fragment`로 앱 본문 전체를 감싸 해결 — 단,
+  지도가 확대·이동해둔 카메라 위치까지 지켜주진 못한다(Plotly가 지도
+  내용이 바뀔 때마다 컴포넌트를 완전히 새로 마운트하는 동작이라, `uirevision`을
+  걸어도 이 조합에선 카메라가 리셋됨 — 직접 확인한 프레임워크 한계).
+- **`main.py`/`streamlit_app.py` 구조 통합**: 자세한 내용은 아래 "다음 할 일"
+  1번(해결됨) 참고. 요지는 `app/agent/factory.py`로 mock 폴백 판단과
+  `top_n` 처리를 공유해 두 앱이 같은 입력에 항상 같은 결정을 내리게 한 것.
+- **흐름 검증 테스트 통과**: `python -m pytest tests/` (180개, 전부 MockLLM
+  기반 + Kakao/네트워크는 monkeypatch로 격리라 API 키 없이도 빠르게 실행됨).
 
 ## 파일 지도
 
@@ -78,10 +97,12 @@ app/
     solar_llm.py   # ★ 프로덕션 기본 LLM. Upstage Solar API를 LiteLLM 경유로 호출(스트리밍 지원) ★
     mock_llm.py    # 키워드 매칭 스텁. 이제는 테스트 전용(RecommendationAgent(llm=MockLLM()))
     tools.py       # ToolExecutor: 도구를 scoring 서비스에 위임, 임의/필수 업종 카운트 조회
-    loop.py        # ReAct 흐름 오케스트레이터. run(top_n=)=완성된 결과, stream()=SSE용 제너레이터
+    loop.py        # ReAct 흐름 오케스트레이터. run(top_n=)=완성된 결과, stream(top_n=)=SSE용 제너레이터
+    factory.py     # main.py/streamlit_app.py가 공유하는 mock 판단·에이전트 생성 (신규)
   data/
-    csv_repository.py       # dong_metrics.csv를 읽어 DongRawMetrics로 공급
-    facility_repository.py  # 임의/필수 업종(상가업소) 조회 — dataset/ 원본 CSV 필요, 지연 캐시
+    csv_repository.py            # dong_metrics.csv를 읽어 DongRawMetrics로 공급
+    facility_repository.py       # 임의/필수 업종(상가업소) 조회 — dataset/ 원본 CSV 필요, 지연 캐시
+    kakao_facility_repository.py # CSV 밖 열린 키워드·"근처" 거리 필터용 Kakao Local API 어댑터 (신규)
 build_dong_metrics.py     # 원본 CSV → dong_metrics.csv 생성 (파이프라인)
 build_dong_boundaries.py  # space_info/ 전국 shapefile → dong_boundaries.geojson (지도용, 서울 425개)
 dong_metrics.csv          # 행정동 지표 테이블 (빌더 산출물, 커밋됨)
@@ -91,8 +112,11 @@ demo.py                   # 시나리오 데모 실행 (실제 Solar API 사용,
 .env                      # UPSTAGE_API_KEY 등 (gitignore됨, 각자 로컬에 개별 생성)
 dataset/                  # 원본 공공데이터 (gitignore됨, ~160MB, data.seoul.go.kr 등에서 재확보)
 space_info/               # 원본 행정동 shapefile+코드표 (gitignore됨, 지도 재생성용)
-tests/test_main.py     # FastAPI 컨트롤러 테스트 (TestClient, MockLLM으로 의존성 오버라이드)
-tests/test_flow.py     # 흐름 검증 (MockLLM 명시 주입)
+tests/test_main.py               # FastAPI 컨트롤러 테스트 (TestClient, MockLLM으로 의존성 오버라이드)
+tests/test_flow.py               # 흐름 검증 (MockLLM 명시 주입)
+tests/test_agent_factory.py      # app/agent/factory.py 공유 로직 테스트
+tests/test_kakao_facility_repository.py  # Kakao 저장소 + '근처' 거리 필터 테스트 (네트워크 없이, monkeypatch)
+tests/test_streamlit_app.py      # streamlit_app.py 고유 로직(캐싱·지도 완전성) 테스트
 ```
 
 ## 절대 바꾸면 안 되는 설계 원칙 (이유 포함)
@@ -134,12 +158,26 @@ tests/test_flow.py     # 흐름 검증 (MockLLM 명시 주입)
 
 ## 다음 할 일 (우선순위 순)
 
-1. **`main.py`(FastAPI/SSE)와 `streamlit_app.py`가 완전히 분리돼 있음 — 배포 전 정리 필요.**
-   둘 다 각자 `RecommendationAgent()`를 직접 생성해서 쓰는 별개 진입점이다.
-   Streamlit이 FastAPI를 HTTP로 호출하게 합칠지, 지금처럼 in-process 두 앱을
-   유지할지(GCP에 둘 다 올릴지) 결정 필요. 지도(Streamlit)는 `top_n=500`으로
-   전체 스코어링하고 FastAPI SSE는 `top_n=3` 고정이라, 지도 기능을 API로도
-   쓰려면 FastAPI 쪽에 `top_n` 파라미터를 열어줘야 할 수 있음.
+1. ~~**`main.py`(FastAPI/SSE)와 `streamlit_app.py`가 완전히 분리돼 있음.**~~ **해결됨.**
+   두 앱을 각각 별도 프로세스로 유지하기로 결정(HTTP로 합치지 않음 — 네트워크
+   왕복 없이 빠르고 로컬 개발도 간단해서). 대신 실제로 갈라져 있던 부분을
+   `app/agent/factory.py`로 합쳤다:
+   - mock 폴백 판단(`using_mock_llm`/`mock_llm_reason`)이 Streamlit에만 있고
+     FastAPI는 키 없으면 그냥 죽던 것 → 팩토리 공유로 둘 다 동일하게 안전 폴백.
+   - `top_n`이 `stream()`(FastAPI가 씀)엔 3으로 하드코딩, `run()`(Streamlit이 씀)엔
+     파라미터였던 것 → `stream()`도 `top_n` 파라미터로 열림(`GET /recommend?top_n=`),
+     `main.py` 기본값은 3 유지. 단, 근거 설명(`explain`/`explain_stream`)은 `top_n`과
+     무관하게 항상 상위 3개만 근거로 삼는다(안 그러면 top_n=500일 때 프롬프트에
+     500개 동네 수치를 통째로 실어보내게 됨) — `run()`은 원래 이렇게 했고 `stream()`도
+     이제 맞춤.
+   - 환경변수 `STREAMLIT_USE_MOCK_LLM` → `USE_MOCK_LLM`으로 개명(더 이상
+     Streamlit 전용이 아니므로).
+   - 각자 `RecommendationAgent()`를 새로 생성하던 것은 그대로 둠(프로세스별
+     독립 인스턴스가 맞는 설계라 판단 — `factory.get_recommendation_agent()`가
+     `main.py`용 프로세스 싱글턴, `factory.build_recommendation_agent()`가
+     Streamlit의 `@st.cache_resource`가 감싸는 순수 생성 함수).
+   - 테스트: `tests/test_agent_factory.py`(공유 로직), `tests/test_main.py`/
+     `tests/test_loop.py`에 `top_n` 케이스 추가.
 2. **GCP 배포** ($300 크레딧). MVP 마무리. `dong_boundaries.geojson`/`dong_metrics.csv`는
    이미 커밋돼 있어 `dataset/`·`space_info/`(원본, gitignore) 없이도 두 앱 다 바로 뜬다.
 3. **반경 1km 적절성 검증.** 큰 행정동(진관동·상계동)에서 부족할 수 있음.
@@ -165,7 +203,7 @@ pip install -r requirements.txt   # litellm/fastapi/streamlit 등 포함, Python
 python demo.py                    # 시나리오 데모 (실제 Solar API, .env 필요)
 uvicorn main:app --reload         # FastAPI 서버 (http://127.0.0.1:8000)
 streamlit run streamlit_app.py    # 지도 UI (http://localhost:8501)
-python -m pytest tests/           # 전체 유닛테스트 (128개, MockLLM 기반, 키 없이도 실행됨)
+python -m pytest tests/           # 전체 유닛테스트 (180개, MockLLM 기반, 키 없이도 실행됨)
 python build_dong_metrics.py      # 지표 테이블 재생성 (dataset/ 원본 CSV 필요)
 python build_dong_boundaries.py   # 지도 GeoJSON 재생성 (space_info/ 원본 shapefile 필요)
 ```
@@ -201,6 +239,19 @@ data.seoul.go.kr 등 서울 열린데이터광장에서 재다운로드하거나
   `dong_boundaries.geojson`은 통계청 SGIS(신 경계) 기준이라 지도 생성 시
   이름 매핑 보정이 필요했다 (`build_dong_boundaries.py`의 `NAME_FIXES`/
   `NAME_OVERRIDES` 참고). 새 공공데이터를 붙일 땐 이 버전 차이를 항상 의심할 것.
+- **Streamlit 풀스크린 CSS가 내부 구현(비공개 API)에 의존한다.** `streamlit_app.py`의
+  `FULLSCREEN_CSS`가 `data-testid`, 자동 생성된 emotion 클래스명(`.st-emotion-cache-*`)을
+  직접 겨냥한다 — Streamlit이 공식 지원하는 게 아니라서 버전을 올리면 조용히
+  깨질 수 있다. 실제로 지도 높이가 안 늘어나는 버그(flex-basis가 height보다
+  우선 적용됨)를 한 번 겪었다. Streamlit 업그레이드 후 지도가 화면을 안
+  채우면 여기부터 볼 것.
+- **지도 카메라 위치(확대/이동)가 위젯 조작 시 초기화된다.** Plotly가 지도
+  내용(색·핀)이 바뀔 때마다 컴포넌트를 완전히 새로 마운트하는 동작이라
+  (`uirevision`을 걸어도 이 조합에선 안 먹힘, 직접 relayout 테스트로 확인),
+  커스텀 JS 브릿지 없이는 못 고치는 것으로 판단해 받아들였다.
+- **Kakao "근처" 반경(`NEAR_RADIUS_KM`, `app/agent/tools.py`)은 동 중심점
+  기준이다.** 큰 행정동은 실제 경계까지의 거리가 반경보다 훨씬 멀 수 있음 —
+  위 "반경 1km 적절성 검증" 항목과 같은 종류의 근사 오차.
 
 ## 트러블슈팅 (Solar API 연동 작업 중 실제로 겪은 것들)
 
@@ -280,38 +331,25 @@ curl -N --get "http://127.0.0.1:8000/recommend" \
 틀리게 바꿔서 테스트하면 `{"type": "error", "message": "..."}`가 오는 것도 확인 가능
 (서버가 죽지 않고 SSE로 에러를 전달함).
 
-<<<<<<< HEAD
 ### 지도 UI(streamlit_app.py) 직접 확인하기
 
 ```bash
-streamlit run streamlit_app.py                          # .env에 키 있으면 실제 Solar API
-STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # 빠른 반복 작업용: 강제 mock
+streamlit run streamlit_app.py                  # .env에 키 있으면 실제 Solar API
+USE_MOCK_LLM=1 streamlit run streamlit_app.py    # 빠른 반복 작업용: 강제 mock
 ```
+
+화면 전체가 지도(기본 스타일: 어두움, 사이드바에서 위성사진 등으로 전환 가능)고
+우측에 반투명 입력 패널이 뜬다. "필수 요구사항"/"선택 요구사항" 칸에 입력하고
+**포커스를 벗어나면**(다른 곳 클릭 또는 Ctrl+Enter) 자동으로 재계산된다 — 버튼 없음. 예:
+
+- 필수: `헬스장 있어야 함` / 선택: `안전하고 무서운 밤길 없는 조용한 동네`
+  → 헬스장 없는 동은 보라색(비추천·필수미충족)으로, 나머지는 안전+환경
+  가중치로 초록(추천)/빨강(비추천·저점수)/회색(그 외)으로 티어링된다.
 
 `.env`에 `UPSTAGE_API_KEY`가 없으면 `load_agent()`가 자동으로 mock으로 낮추고
 화면 상단에 "⚠ Mock LLM으로 동작 중 (UPSTAGE_API_KEY 없음)" 캡션이 뜬다 — 앱이
-죽지 않고 항상 실행은 된다. 키가 있어도 색깔·레이아웃만 반복 확인할 땐
-`STREAMLIT_USE_MOCK_LLM=1`로 강제 전환하는 게 빠르다 (이땐 캡션에 "STREAMLIT_USE_MOCK_LLM
-설정됨"으로 표시). 이 UI는 입력창 값이 바뀔 때마다(포커스 아웃/Ctrl+Enter)
-`parse_intent`+`explain` 2회를 다시 호출하는 구조라, 실제 시연 때만 키를 넣고
-Solar로 돌리는 걸 권장한다.
-=======
-### Streamlit UI 직접 확인하기
-
-```bash
-streamlit run streamlit_app.py
-```
-
-`http://localhost:8501`에서 왼쪽에 서울 지도(처음엔 전체 회색)가 바로 뜬다.
-오른쪽 "필수 요구사항"/"선택 요구사항" 칸에 입력하고 **포커스를 벗어나면**
-(다른 곳 클릭 또는 Ctrl+Enter) 자동으로 재계산된다 — 버튼 없음. 예:
-
-- 필수: `헬스장 있어야 함` / 선택: `안전하고 무서운 밤길 없는 조용한 동네`
-  → 헬스장 없는 동은 지도에서 보라색(비추천·필수미충족)으로 표시되고,
-  안전+환경 가중치로 나머지가 초록(추천)/빨강(비추천·저점수)/회색(그 외)으로 티어링된다.
-
-동에 마우스를 올리면 그 동이 밝아지며 흰 테두리 글로우가 뜨고(CSS `:hover`),
-동시에 실제 지표(범죄율·CCTV·편의점·공원 등) 툴팁이 그 동의 티어 색으로
-채워져서 뜬다. `UPSTAGE_API_KEY`가 없으면 화면 상단에 경고가 뜨고 자동으로
-MockLLM으로 동작한다(결정론적이라 위 예시 그대로 재현 가능).
->>>>>>> 39817fb (Update HANDOFF.md for facility/required-category/map/Streamlit UI work)
+죽지 않고 항상 실행은 된다(결정론적이라 위 예시 그대로 재현 가능). 키가 있어도
+색깔·레이아웃만 반복 확인할 땐 `USE_MOCK_LLM=1`로 강제 전환하는 게 빠르다(이땐
+캡션에 "USE_MOCK_LLM 설정됨"으로 표시). 이 UI는 입력창 값이 바뀔 때마다
+(포커스 아웃/Ctrl+Enter) `parse_intent`+`explain` 2회를 다시 호출하는 구조라,
+실제 시연 때만 키를 넣고 Solar로 돌리는 걸 권장한다.

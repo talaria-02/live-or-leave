@@ -1,23 +1,19 @@
-"""streamlit_app.py의 mock/실 LLM 전환 로직 단위 테스트.
+"""streamlit_app.py 고유 로직 단위 테스트.
 
-load_agent/using_mock_llm/_mock_llm_reason은 os.environ만으로 분기하는
-순수 로직이라 실제 Streamlit 런타임(스크립트 실행 컨텍스트) 없이도
-검증할 수 있다. 다만 load_agent는 @st.cache_resource가 걸려 있어 테스트
-간 캐시가 새면 이전 호출의 인스턴스가 그대로 반환된다 — 매 테스트 전
-캐시를 비운다.
+mock 판단·에이전트 생성 자체(using_mock_llm/mock_llm_reason/build_recommendation_agent)는
+app/agent/factory.py로 옮겨 main.py(FastAPI)와 공유한다 — 그 로직의 세부
+분기 테스트는 tests/test_agent_factory.py에 있다. 여기서는 Streamlit이 그
+공유 로직을 "제대로 가져다 쓰는지"(재노출·캐싱)만 확인한다.
 
-관점:
-  - 기능(정상 분기): 키 유무 × STREAMLIT_USE_MOCK_LLM 유무 4가지 조합
-  - 경계값: 빈 문자열로 설정된 환경변수는 os.environ.get이 truthy가
-    아니므로(bool("") == False) "설정 안 함"과 동일하게 취급된다 —
-    직관과 다를 수 있는 실제 동작을 문서화
-  - 보안: _mock_llm_reason()이 실제 API 키 값을 절대 노출하지 않는지
+load_agent는 @st.cache_resource가 걸려 있어 테스트 간 캐시가 새면 이전
+호출의 인스턴스가 그대로 반환된다 — 매 테스트 전 캐시를 비운다.
 """
 from __future__ import annotations
 
 import pytest
 
 import streamlit_app
+from app.agent import factory as agent_factory
 from app.agent.mock_llm import MockLLM
 
 
@@ -32,67 +28,19 @@ def _clear_agent_cache():
     streamlit_app.run_agent_cached.clear()
 
 
-# ---------- using_mock_llm(): 키 유무 × 강제 mock 4가지 조합 ----------
+# ---------- 공유 팩토리 위임 확인 (세부 분기는 test_agent_factory.py) ----------
 
-def test_using_mock_llm_true_when_no_key(monkeypatch):
+def test_using_mock_llm_is_the_shared_factory_function():
+    """재구현이 아니라 진짜 같은 함수여야 한다 — main.py와 판단이 갈라지는 걸 방지."""
+    assert streamlit_app.using_mock_llm is agent_factory.using_mock_llm
+
+
+def test_mock_llm_reason_delegates_to_shared_factory(monkeypatch):
     monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
-    monkeypatch.delenv("STREAMLIT_USE_MOCK_LLM", raising=False)
-    assert streamlit_app.using_mock_llm() is True
+    assert streamlit_app._mock_llm_reason() == agent_factory.mock_llm_reason()
 
 
-def test_using_mock_llm_false_when_key_present_and_not_forced(monkeypatch):
-    monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
-    monkeypatch.delenv("STREAMLIT_USE_MOCK_LLM", raising=False)
-    assert streamlit_app.using_mock_llm() is False
-
-
-def test_using_mock_llm_true_when_key_present_but_forced(monkeypatch):
-    monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
-    monkeypatch.setenv("STREAMLIT_USE_MOCK_LLM", "1")
-    assert streamlit_app.using_mock_llm() is True
-
-
-def test_using_mock_llm_true_when_no_key_and_forced(monkeypatch):
-    """키도 없고 강제 플래그도 있는 경우 — 두 조건 중 하나만 있어도 mock이어야 한다."""
-    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
-    monkeypatch.setenv("STREAMLIT_USE_MOCK_LLM", "1")
-    assert streamlit_app.using_mock_llm() is True
-
-
-# ---------- 경계값: 빈 문자열 환경변수 ----------
-
-def test_using_mock_llm_empty_string_flag_does_not_force_mock(monkeypatch):
-    """STREAMLIT_USE_MOCK_LLM=''(빈 문자열)은 '설정함'이 아니라 '설정 안 함'과 같다
-    (bool("") == False). set이냐 unset이냐가 아니라 값의 진리성으로 판단하는
-    현재 구현의 실제 동작 — 셸에서 `STREAMLIT_USE_MOCK_LLM= streamlit run ...`처럼
-    빈 값으로 export해도 강제 mock이 켜지지 않는다는 뜻."""
-    monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
-    monkeypatch.setenv("STREAMLIT_USE_MOCK_LLM", "")
-    assert streamlit_app.using_mock_llm() is False
-
-
-# ---------- _mock_llm_reason(): 사유 문구 + 키 노출 금지 ----------
-
-def test_mock_llm_reason_reports_missing_key(monkeypatch):
-    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
-    assert streamlit_app._mock_llm_reason() == "UPSTAGE_API_KEY 없음"
-
-
-def test_mock_llm_reason_reports_forced_flag_when_key_present(monkeypatch):
-    monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
-    monkeypatch.setenv("STREAMLIT_USE_MOCK_LLM", "1")
-    assert streamlit_app._mock_llm_reason() == "STREAMLIT_USE_MOCK_LLM 설정됨"
-
-
-def test_mock_llm_reason_never_leaks_the_actual_api_key(monkeypatch):
-    """화면에 그대로 노출되는 캡션 문구이므로, 키 값 자체가 절대 섞여 들어가면 안 된다."""
-    secret = "up_9gHwvBT5FPWMm55dxRcTO6SUmFWt1"
-    monkeypatch.setenv("UPSTAGE_API_KEY", secret)
-    monkeypatch.setenv("STREAMLIT_USE_MOCK_LLM", "1")
-    assert secret not in streamlit_app._mock_llm_reason()
-
-
-# ---------- load_agent(): 실제 분기 결과(agent.llm 타입)까지 확인 ----------
+# ---------- load_agent(): st.cache_resource가 실제로 factory 결과를 캐싱하는지 ----------
 
 def test_load_agent_uses_mock_llm_when_no_key(monkeypatch):
     monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
@@ -102,7 +50,7 @@ def test_load_agent_uses_mock_llm_when_no_key(monkeypatch):
 
 def test_load_agent_uses_mock_llm_when_forced_despite_key(monkeypatch):
     monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
-    monkeypatch.setenv("STREAMLIT_USE_MOCK_LLM", "1")
+    monkeypatch.setenv("USE_MOCK_LLM", "1")
     agent = streamlit_app.load_agent()
     assert isinstance(agent.llm, MockLLM)
 
@@ -111,7 +59,7 @@ def test_load_agent_uses_real_llm_when_key_present_and_not_forced(monkeypatch):
     """실 API를 호출하지는 않는다 — SolarLLM 생성자는 키를 읽어 저장만 하고
     네트워크 요청은 parse_intent/explain 호출 시점에야 일어난다."""
     monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
-    monkeypatch.delenv("STREAMLIT_USE_MOCK_LLM", raising=False)
+    monkeypatch.delenv("USE_MOCK_LLM", raising=False)
     agent = streamlit_app.load_agent()
     assert not isinstance(agent.llm, MockLLM)
     assert agent.llm.api_key == "real-key"

@@ -46,6 +46,7 @@ app/
     mock_llm.py      # 규칙 기반 스텁 LLM (테스트 전용, RecommendationAgent(llm=MockLLM())로 주입)
     tools.py         # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py          # ReAct 흐름 오케스트레이터 (입구→도구→출구, 되묻기 1회)
+    factory.py       # main.py(FastAPI)와 streamlit_app.py가 공유하는 mock 판단·에이전트 생성
   data/
     csv_repository.py       # dong_metrics.csv 로더
     facility_repository.py  # 임의 업종(상가업소) 조회, 프로세스 수명 동안 캐시
@@ -77,8 +78,8 @@ curl -N --get "http://127.0.0.1:8000/recommend" \
 지도 UI 실행:
 
 ```bash
-streamlit run streamlit_app.py                          # 기본값: 실제 Solar API (실제 시연용)
-STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # mock (레이아웃·색깔 등 빠른 반복 확인용)
+streamlit run streamlit_app.py                  # 기본값: 실제 Solar API (실제 시연용)
+USE_MOCK_LLM=1 streamlit run streamlit_app.py    # mock (레이아웃·색깔 등 빠른 반복 확인용)
 ```
 
 `dong_metrics.csv`는 이미 커밋돼 있어 위 명령만으로 바로 동작합니다. 원본 공공데이터

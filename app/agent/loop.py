@@ -87,13 +87,18 @@ class RecommendationAgent:
             kind="recommendation", message=message, trace=trace, data=result
         )
 
-    def stream(self, user_text: str):
+    def stream(self, user_text: str, top_n: int = 3):
         """SSE 컨트롤러(main.py)용 제너레이터 버전의 run().
 
         run()과 동일한 흐름(파싱→[되묻기]→도구→설명)을 따르되, 설명 단계를
         토큰 단위 이벤트로 흘려보낸다. 실패해도 예외를 밖으로 던지지 않고
         {"type": "error"} 이벤트로 알린다 — SSE는 응답이 이미 시작된 상태라
         HTTP 상태 코드로는 실패를 표현할 수 없기 때문이다.
+
+        top_n을 늘리면(예: 지도 API 소비자) meta.data.recommendations에는
+        top_n개가 다 담기지만, run()과 마찬가지로 설명(explain_stream)은
+        항상 상위 3개만 근거로 삼는다 — 안 그러면 top_n=500일 때 프롬프트에
+        500개 동네 원본 수치를 통째로 실어보내게 된다.
 
         이벤트 종류: meta(kind/trace/[data]) → delta(text)* → done, 또는 error(message).
         """
@@ -103,6 +108,8 @@ class RecommendationAgent:
             intent = self.llm.parse_intent(user_text)
             trace.append(f"[step {steps}] parse_intent → {intent.preference.model_dump()} "
                          f"(hospital={intent.require_large_hospital}, "
+                         f"required={intent.required_categories}, near={intent.required_near}, "
+                         f"extra={intent.extra_categories}, "
                          f"clarify={intent.needs_clarification})")
 
             if intent.needs_clarification:
@@ -124,18 +131,19 @@ class RecommendationAgent:
                 extra_categories=intent.extra_categories,
                 required_categories=intent.required_categories,
                 required_near=intent.required_near,
-                top_n=3,
+                top_n=top_n,
             )
             result = self.tools.recommend(tool_args)
-            top = [r["gu"] for r in result["recommendations"]]
+            top = [r["gu"] for r in result["recommendations"][:3]]
             trace.append(f"[step {steps}] tool:recommend → weights={result['weights']} "
                          f"top={top}")
 
             steps += 1
-            trace.append(f"[step {steps}] explain_stream → 근거 설명 스트리밍 시작 ({len(top)}건)")
+            trace.append(f"[step {steps}] explain_stream → 근거 설명 스트리밍 시작 (상위 {len(top)}건)")
             yield {"type": "meta", "kind": "recommendation", "trace": list(trace), "data": result}
 
-            for chunk in self.llm.explain_stream(user_text, result):
+            explain_input = {**result, "recommendations": result["recommendations"][:3]}
+            for chunk in self.llm.explain_stream(user_text, explain_input):
                 yield {"type": "delta", "text": chunk}
 
             yield {"type": "done"}
