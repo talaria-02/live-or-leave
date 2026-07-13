@@ -213,6 +213,30 @@ def test_explain_no_extra_facility_note_when_not_requested():
     assert "등록된 업소 수 기준" not in msg
 
 
+def test_explain_reports_unsupported_noise_and_soundproofing_limits():
+    msg = MockLLM().explain(
+        "집에서 집중해야 해서 조용하고 방음이 잘 되는 곳, 공원도 가까운 곳",
+        _fake_result(hosp_cnt=1),
+    )
+    assert "[현재 데이터 한계]" in msg
+    assert "조용함/소음/방음" in msg
+    assert "소음도" in msg
+
+
+def test_explain_reports_rent_limit_only_when_price_is_requirement():
+    background_only = MockLLM().explain(
+        "현재 주거는 전·월세예요. 공원이 가까운 곳",
+        _fake_result(hosp_cnt=1),
+    )
+    price_need = MockLLM().explain(
+        "월세 부담이 커서 저렴한 곳이 필요해요",
+        _fake_result(hosp_cnt=1),
+    )
+
+    assert "월세/전세/주거비" not in background_only
+    assert "월세/전세/주거비" in price_need
+
+
 # ---------- explain_stream (SSE 테스트용) ----------
 
 def test_explain_stream_reconstructs_same_text_as_explain():

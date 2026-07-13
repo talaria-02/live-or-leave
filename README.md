@@ -81,9 +81,27 @@ streamlit run streamlit_app.py                          # 기본값: 실제 Sola
 STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # mock (레이아웃·색깔 등 빠른 반복 확인용)
 ```
 
+Docker Compose로 API와 지도 UI를 함께 실행:
+
+```bash
+cp .env.example .env
+# .env에 UPSTAGE_API_KEY 입력
+docker compose up -d --build
+curl http://127.0.0.1:8000/health
+```
+
+- API: `http://127.0.0.1:8000`
+- 지도 UI: `http://127.0.0.1:8501`
+- GCE 배포 절차는 [docs/deploy-gce.md](docs/deploy-gce.md)에 정리돼 있습니다.
+
 `dong_metrics.csv`는 이미 커밋돼 있어 위 명령만으로 바로 동작합니다. 원본 공공데이터
 (`dataset/`)는 용량이 커서(약 160MB) `.gitignore` 처리돼 있고, 재생성하려면 원본
 CSV들을 별도로 확보해 `python build_dong_metrics.py`를 실행해야 합니다.
+
+주의: 실제 Solar 경로에서 "헬스장", "카페" 같은 임의 업종을 해석하려면
+`dataset/소상공인시장진흥공단_상가(상권)정보_서울.csv`가 필요합니다. Docker 이미지에는
+원본 CSV를 넣지 않고, `docker-compose.yml`에서 VM의 `./dataset`을 `/app/dataset`으로
+마운트합니다.
 
 Python 3.9 이상이 필요합니다 (LiteLLM 의존성 때문).
 
@@ -107,9 +125,10 @@ UPSTAGE_API_KEY=본인의_Upstage_API_키
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
   필수조건 하드필터(`required_categories`), 실제 Upstage Solar API 연동
   (`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`),
-  재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`).
-- 다음(Day4): Docker 컨테이너화 + GCE 배포(FE 포함), GitHub Actions CI/CD,
-  Nemotron-Personas-Korea 기반 핵심 시나리오 30개 검증.
+  재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`), Docker Compose
+  실행 구성, GitHub Actions CI.
+- 다음(Day4): GCE VM에 Docker Compose로 실제 배포, GitHub Actions 통과 화면 캡처,
+  공개 HTTP URL 확인, Nemotron-Personas-Korea 기반 핵심 시나리오 30개 검증.
 
 자세한 트러블슈팅·재현 방법·설계 원칙은 [HANDOFF.md](HANDOFF.md)를 참고하세요.
 
