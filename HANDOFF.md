@@ -39,7 +39,7 @@
 - **Day4 배포 완료 (로컬 빌드 → GCE 실제 배포 → CI/CD)**: `Dockerfile`,
   `docker-compose.yml`, `.dockerignore`, `.env.example`, `docs/deploy-gce.md`를
   추가했다. FastAPI API(8000)와 Streamlit UI(8501)를 같은 Docker 이미지에서
-  command만 다르게 실행한다. GCE VM(`us-central1-a`, e2-micro, 고정 IP)에 실제로
+  command만 다르게 실행한다. GCE VM(`asia-northeast3-a`, e2-standard-4, 고정 IP)에 실제로
   clone·배포해 외부에서 `http://<VM_IP>:8000/health`, `http://<VM_IP>:8501`
   접속을 확인했다. GitHub Actions는 `.github/workflows/ci.yml`(테스트 +
   Docker 이미지 빌드)과 `.github/workflows/cd.yml`(CI 성공 시 `workflow_run`으로
@@ -406,6 +406,9 @@ mock 데이터 계획을 조정해야 한다.
    - `.github/workflows/cd.yml`: CI가 main에서 성공으로 끝나면 `workflow_run`으로
      트리거돼 전용 SSH 배포키(`GCE_SSH_PRIVATE_KEY` GitHub Secret)로 VM에 접속,
      `git pull` + `docker compose up -d --build`를 실행한다. PR에서는 절대 배포되지 않는다.
+     접속 대상 IP·계정명도 코드에 하드코딩하지 않고 `GCE_HOST`/`GCE_USER` GitHub
+     Secret으로 관리한다 — VM을 새로 만들어 IP가 바뀌어도 `cd.yml`을 고칠 필요 없이
+     Secret 값만 갱신하면 된다.
 4. **핵심 시나리오 30개 구성** — `QUTUMENT/nemotron-personas-korea-extended`
    서울 중심 샘플을 기반으로 현실적인 질문 후보를 만들고, 현재 스키마 커버리지
    (`answerable`/`partial`/`not_answerable`)를 태깅한 뒤 실제 Solar API 대상으로 검증.

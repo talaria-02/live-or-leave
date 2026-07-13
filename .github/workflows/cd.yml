@@ -13,12 +13,15 @@ jobs:
 
     steps:
       - name: Deploy to GCE via SSH
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.GCE_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 34.45.54.7 >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key jeong-yeongjun@34.45.54.7 '
+          ssh-keyscan -H "$GCE_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key "$GCE_USER@$GCE_HOST" '
             cd ~/live-or-leave &&
             git pull origin main &&
             docker compose up -d --build
