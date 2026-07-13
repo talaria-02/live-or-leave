@@ -46,6 +46,7 @@ app/
     mock_llm.py      # 규칙 기반 스텁 LLM (테스트 전용, RecommendationAgent(llm=MockLLM())로 주입)
     tools.py         # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py          # ReAct 흐름 오케스트레이터 (입구→도구→출구, 되묻기 1회)
+    factory.py       # main.py(FastAPI)와 streamlit_app.py가 공유하는 mock 판단·에이전트 생성
   data/
     csv_repository.py       # dong_metrics.csv 로더
     facility_repository.py  # 임의 업종(상가업소) 조회, 프로세스 수명 동안 캐시
@@ -77,8 +78,8 @@ curl -N --get "http://127.0.0.1:8000/recommend" \
 지도 UI 실행:
 
 ```bash
-streamlit run streamlit_app.py                          # 기본값: 실제 Solar API (실제 시연용)
-STREAMLIT_USE_MOCK_LLM=1 streamlit run streamlit_app.py  # mock (레이아웃·색깔 등 빠른 반복 확인용)
+streamlit run streamlit_app.py                  # 기본값: 실제 Solar API (실제 시연용)
+USE_MOCK_LLM=1 streamlit run streamlit_app.py    # mock (레이아웃·색깔 등 빠른 반복 확인용)
 ```
 
 Docker Compose로 API와 지도 UI를 함께 실행:
@@ -138,11 +139,14 @@ Langfuse Tracing 대시보드에 전송합니다(코드 추가 수정 불필요)
 ## 지금 상태 / 다음 할 일
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
-  필수조건 하드필터(`required_categories`), 실제 Upstage Solar API 연동
-  (`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`),
-  재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`), Docker Compose
-  실행 구성, GitHub Actions CI/CD(GCE VM 자동 배포), Langfuse 기반 LLM 호출 추적.
-- 다음: Nemotron-Personas-Korea 기반 핵심 시나리오 30개 검증, 발표 산출물 정리.
+  필수조건 하드필터(`required_filters` — 업종/거리/행정구역/지표임계값 4종,
+  Kakao Local API 연동), 실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM
+  경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`), 재시도를 포함한 실패 처리,
+  Streamlit 지도 UI(`streamlit_app.py`, 위성/다크 풀스크린 지도), Docker Compose
+  실행 구성, GitHub Actions CI/CD(GCE VM 자동 배포), Langfuse 기반 LLM 호출 추적,
+  Nemotron-Personas-Korea 기반 핵심 시나리오 30개.
+- 다음: 반경 적절성 검증, `CompareTool` 버그 수정, 실패 케이스 처리 고도화 등
+  자세한 항목은 [HANDOFF.md](HANDOFF.md)의 "다음 할 일" 참고.
 
 자세한 트러블슈팅·재현 방법·설계 원칙은 [HANDOFF.md](HANDOFF.md)를 참고하세요.
 

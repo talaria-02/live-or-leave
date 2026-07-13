@@ -57,6 +57,66 @@ def partition_by_required_categories(
     return qualified, disqualified
 
 
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """(lon, lat) 두 점 사이 대원거리(km)."""
+    from math import asin, cos, radians, sin, sqrt
+
+    lon1, lat1, lon2, lat2 = map(radians, (*a, *b))
+    h = sin((lat2 - lat1) / 2) ** 2 + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(h))
+
+
+def partition_by_proximity(
+    scores: list[DongScores],
+    landmarks: dict[str, tuple[float, float]],
+    centroids: dict[str, tuple[float, float]],
+    radius_km: float,
+) -> tuple[list[DongScores], list[dict]]:
+    """'서울대 근처' 류 거리 필수조건 — 모든 랜드마크에서 radius_km 이내
+    (동 중심점 기준)인 동만 통과. partition_by_required_categories와 동일한
+    (qualified, disqualified+사유) 반환 형태."""
+    qualified = []
+    disqualified = []
+    for s in scores:
+        c = centroids.get(s.code)
+        missing = [
+            f"{name} 근처({radius_km:g}km 이내) 아님"
+            for name, coord in landmarks.items()
+            if c is None or haversine_km(c, coord) > radius_km
+        ]
+        if missing:
+            disqualified.append({"scores": s, "missing": missing})
+        else:
+            qualified.append(s)
+    return qualified, disqualified
+
+
+def partition_by_metric(
+    scores: list[DongScores],
+    field: str,
+    cutoff_percentile: float,
+    invert: bool,
+    level_label: str,
+) -> tuple[list[DongScores], list[dict]]:
+    """지표 하나에 백분위 컷오프를 걸어 하드필터한다 (예: crime_rate 상위 30%
+    안=범죄율 낮은 쪽 30%만 통과). invert=True면 값이 작을수록 좋은 지표
+    (crime_rate 등), False면 클수록 좋은 지표(park_cnt 등).
+
+    percentile_norm과 같은 랭킹 계산을 재사용한다 — 이미 있는 정규화 로직을
+    필터에도 그대로 쓰는 것이라 필드가 늘어도 새 계산 로직이 필요 없다."""
+    values = {s.code: getattr(s.raw, field) for s in scores}
+    percentiles = _percentile_norm(values, invert=invert)  # 1에 가까울수록 좋음
+    threshold = 1 - cutoff_percentile
+    qualified = []
+    disqualified = []
+    for s in scores:
+        if percentiles[s.code] >= threshold:
+            qualified.append(s)
+        else:
+            disqualified.append({"scores": s, "missing": [f"{field} {level_label} 기준 미달"]})
+    return qualified, disqualified
+
+
 def _percentile_norm(values: dict[str, float], invert: bool = False) -> dict[str, float]:
     """백분위 정규화 (0~1). invert=True면 낮을수록 1점."""
     items = sorted(values.items(), key=lambda x: x[1])

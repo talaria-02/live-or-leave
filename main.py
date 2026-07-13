@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app.agent.factory import get_recommendation_agent, using_mock_llm
 from app.agent.loop import RecommendationAgent
 
 app = FastAPI(title="살래말래 (Live or Leave)")
@@ -27,23 +28,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 요청마다 CsvDongRepository(dong_metrics.csv)를 새로 읽지 않도록 프로세스 수명 동안 재사용.
-_agent = RecommendationAgent()
-
 
 def get_agent() -> RecommendationAgent:
-    return _agent
+    # app.agent.factory의 프로세스 지연 싱글턴 — streamlit_app.py와 mock 폴백
+    # 판단을 공유한다 (UPSTAGE_API_KEY 없으면 여기도 자동으로 MockLLM으로 낮춘다).
+    return get_recommendation_agent()
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "mock_llm": using_mock_llm()}
 
 
 @app.get("/recommend")
-def recommend(text: str, agent: RecommendationAgent = Depends(get_agent)) -> StreamingResponse:
+def recommend(
+    text: str, top_n: int = 3, agent: RecommendationAgent = Depends(get_agent)
+) -> StreamingResponse:
+    """top_n 기본값 3(자연어 답변용). 지도처럼 전체 스코어링이 필요한 소비자는
+    top_n=500까지 늘릴 수 있다 — 단 근거 설명은 top_n과 무관하게 항상 상위
+    3개만 생성된다(agent.stream 참고)."""
     def event_stream():
-        for event in agent.stream(text):
+        for event in agent.stream(text, top_n=top_n):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

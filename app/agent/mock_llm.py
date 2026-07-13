@@ -10,6 +10,9 @@ Mock LLM — 실제 Solar API 호출을 대체하는 결정론적 스텁.
 """
 from __future__ import annotations
 
+import re
+
+from app.agent.tools import GU_ALIASES, SEOUL_GU
 from app.agent.unsupported_requirements import (
     detect_unsupported_requirements,
     format_unsupported_requirements,
@@ -17,9 +20,15 @@ from app.agent.unsupported_requirements import (
 from app.schemas.domain import CATEGORY_CAVEATS
 from app.schemas.tools import (
     CategoryPreference,
+    FilterClause,
     Importance,
     ParsedIntent,
 )
+
+# 알려진 이름만 찾는다 — 일반 \S+구 정규식은 "요구사항" 같은 마커 텍스트의
+# "요구"까지 구 이름으로 오인식한다. 긴 이름(별칭) 먼저 검사해 "강남구"가
+# "강남3구" 안에서 먼저 매칭되는 걸 방지.
+_KNOWN_GU_NAMES = sorted(set(SEOUL_GU) | set(GU_ALIASES), key=len, reverse=True)
 
 # 키워드 → 카테고리 매핑 (실제 LLM의 의미 이해를 규칙으로 근사)
 _KW = {
@@ -79,6 +88,31 @@ def _match_facility_categories(text: str) -> list[str]:
     return matched
 
 
+_EXCLUDE_MARKERS = ("빼", "제외", "말고")
+
+
+def _match_gu_filters(text: str) -> list[FilterClause]:
+    """"강남구 안에서만"/"강남구는 빼고" 같은 구 포함·제외 요구를 규칙 기반으로
+    근사한다. 알려진 25개 구 이름·별칭만 찾고, 그 뒤 몇 글자 안에 제외 마커가
+    있는지로 포함/제외를 가른다 — metric 필터처럼 자유 문장 의미 파악이
+    필요한 건 정확도가 떨어져 mock에서는 지원하지 않는다."""
+    include, exclude = [], []
+    for name in _KNOWN_GU_NAMES:
+        idx = text.find(name)
+        if idx == -1:
+            continue
+        tail = text[idx + len(name): idx + len(name) + 6]
+        bucket = exclude if any(mk in tail for mk in _EXCLUDE_MARKERS) else include
+        if name not in bucket:
+            bucket.append(name)
+    clauses = []
+    if include:
+        clauses.append(FilterClause(type="gu", gu=include, exclude=False))
+    if exclude:
+        clauses.append(FilterClause(type="gu", gu=exclude, exclude=True))
+    return clauses
+
+
 class MockLLM:
     def parse_intent(self, text: str) -> ParsedIntent:
         required_part, optional_part = _split_required_optional(text)
@@ -100,10 +134,22 @@ class MockLLM:
         require_hosp = ("대형병원" in text) or ("종합병원" in text)
 
         extra = _match_facility_categories(optional_part)
-        required = _match_facility_categories(required_part)
 
-        # 4개 카테고리도 모호하고 선택/필수 업종도 없으면 성향 모호 → 되묻기
-        if all(v == Importance.NONE for v in labels.values()) and not extra and not required:
+        # 필수 구역 → FilterClause 목록. near가 우선이라 같은 이름이 category에
+        # 남으면 제거(실 LLM 파싱과 동일 규칙, solar_llm._parse_required_filters 참고).
+        near_places = list(dict.fromkeys(
+            m.group(1) for m in re.finditer(r"(\S+?)\s*(?:근처|가까이|인근)", required_part)
+        ))
+        required_filters = [FilterClause(type="near", place=p) for p in near_places]
+        required_filters += [
+            FilterClause(type="category", category=c)
+            for c in _match_facility_categories(required_part) if c not in near_places
+        ]
+        required_filters += _match_gu_filters(required_part)
+
+        # 4개 카테고리도 모호하고 선택/필수 조건도 없으면 성향 모호 → 되묻기
+        if (all(v == Importance.NONE for v in labels.values())
+                and not extra and not required_filters):
             return ParsedIntent(
                 preference=pref,
                 needs_clarification=True,
@@ -111,7 +157,7 @@ class MockLLM:
             )
         return ParsedIntent(
             preference=pref, require_large_hospital=require_hosp,
-            extra_categories=extra, required_categories=required,
+            extra_categories=extra, required_filters=required_filters,
         )
 
     def explain(self, user_text: str, result: dict) -> str:

@@ -42,7 +42,7 @@ vi .env
 UPSTAGE_API_KEY=...
 SOLAR_MODEL=solar-pro2-251215
 UPSTAGE_API_BASE=https://api.upstage.ai/v1
-STREAMLIT_USE_MOCK_LLM=0
+USE_MOCK_LLM=0
 ```
 
 (선택) Solar 호출을 Langfuse로 추적하고 싶으면 같은 `.env`에 아래도 추가한다.
@@ -97,9 +97,11 @@ Secret으로 관리한다. VM을 새로 만들어 고정 IP가 바뀌면, 코드
 
 ## 발표 데모 운영 팁
 
-- API 키가 없거나 UI 디자인만 확인할 때는 `.env`에서 `STREAMLIT_USE_MOCK_LLM=1`로 둔다.
-- 실제 LLM 답변 품질을 보여줄 때는 `STREAMLIT_USE_MOCK_LLM=0`과 `UPSTAGE_API_KEY`가 필요하다.
+- API 키가 없거나 UI 디자인만 확인할 때는 `.env`에서 `USE_MOCK_LLM=1`로 둔다.
+- 실제 LLM 답변 품질을 보여줄 때는 `USE_MOCK_LLM=0`과 `UPSTAGE_API_KEY`가 필요하다.
 - 실제 Solar 경로를 쓰려면 업종 질문 여부와 무관하게 위 CSV 1개가 항상 있어야 한다(위 참고).
+- Kakao Local API를 쓰려면 `KAKAO_REST_API_KEY`도 채운다 — 없으면 CSV 밖 업종(클라이밍장 등)
+  필터만 비활성화되고 나머지 기능은 그대로 동작한다.
 - F19처럼 소음/방음 등 현재 데이터가 부족한 조건은 추천을 꾸미기보다 부족 조건을 명시하는 방향으로 보여준다.
 - `LANGFUSE_*` 키를 넣어뒀다면, 데모 중 실제로 들어온 질문·응답·지연시간을
   Langfuse Tracing 대시보드(cloud.langfuse.com)에서 실시간으로 보여줄 수 있다.

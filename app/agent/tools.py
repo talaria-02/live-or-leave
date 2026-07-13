@@ -1,10 +1,53 @@
-"""도구 실행기 — 행정동 단위. 서비스 계층에 위임."""
+"""도구 실행기 — 행정동 단위. 서비스 계층에 위임.
+
+required_filters(FilterClause 목록)를 type별로 디스패치해 pool을 순서대로
+좁혀나간다: category → near(그룹별 OR/AND) → gu → metric → (대형병원, 특수케이스).
+새 필터 타입이 늘어도 여기 분기 하나 + scoring.py 실행 함수 하나만 추가하면
+된다 — LLM 호출 구조(입구 1회)는 그대로.
+"""
 from __future__ import annotations
 
 from app.data.csv_repository import CsvDongRepository
-from app.data.facility_repository import get_facility_repository
-from app.schemas.tools import CompareTool, RecommendTool
+from app.data.kakao_facility_repository import get_hybrid_facility_repository
+from app.schemas.tools import CompareTool, FilterClause, MetricLevel, RecommendTool
 from app.services import scoring
+
+# '근처'의 기본 반경 (동 중심점 기준). FilterClause.radius_km로 절별 override 가능.
+NEAR_RADIUS_KM = 3.0
+
+SEOUL_GU = [
+    "강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구",
+    "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구",
+    "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구",
+]
+
+# "강남3구" 같은 통칭 → 실제 구 이름 목록. LLM은 통칭을 그대로 출력해도 되고,
+# 코드가 여기서 해석한다(잘못된 구 이름 나열 방지).
+GU_ALIASES: dict[str, list[str]] = {
+    "강남3구": ["강남구", "서초구", "송파구"],
+    "강남4구": ["강남구", "서초구", "송파구", "강동구"],
+    "강북": ["강북구", "도봉구", "노원구", "성북구", "동대문구", "중랑구"],
+    "도심권": ["종로구", "중구", "용산구"],
+}
+
+# metric 필터 대상 필드 — 화이트리스트 (LLM이 임의 문자열 못 만들게).
+# True = 값이 작을수록 좋음(invert), False = 클수록 좋음.
+METRIC_DIRECTIONS: dict[str, bool] = {
+    "crime_rate": True,
+    "cctv_cnt": False,
+    "conv_cnt": False,
+    "mart_cnt": False,
+    "hosp_cnt": False,
+    "bus_cnt": False,
+    "subway_access": False,
+    "park_cnt": False,
+}
+
+METRIC_LEVEL_CUTOFF: dict[MetricLevel, float] = {
+    MetricLevel.MODERATE: 0.5,
+    MetricLevel.STRICT: 0.3,
+    MetricLevel.VERY_STRICT: 0.15,
+}
 
 
 class ToolExecutor:
@@ -15,9 +58,15 @@ class ToolExecutor:
         raws = self.repo.all_metrics()
         scores = scoring.score_dongs(raws)
 
+        by_type: dict[str, list[FilterClause]] = {"category": [], "near": [], "gu": [], "metric": []}
+        for c in args.required_filters:
+            by_type[c.type].append(c)
+
+        # CSV 우선, CSV에 없는 열린 키워드만 Kakao 폴백. gu/metric은 로컬
+        # 데이터만으로 되므로 이것들만 있을 땐 Kakao 저장소 자체를 안 만든다.
         facility_repo = (
-            get_facility_repository()
-            if args.extra_categories or args.required_categories
+            get_hybrid_facility_repository()
+            if args.extra_categories or by_type["category"] or by_type["near"]
             else None
         )
 
@@ -27,18 +76,103 @@ class ToolExecutor:
         }
         extra_scores = scoring.score_extra_categories(raws, extra_counts)
 
-        required_counts: dict[str, dict[str, int]] = {
-            cat: {r.code: facility_repo.count(r.gu, r.dong, cat) for r in raws}
-            for cat in args.required_categories
-        }
-        pool, disqualified = (
-            scoring.partition_by_required_categories(scores, required_counts)
-            if required_counts else (scores, [])
-        )
+        pool = scores
+        disqualified: list[dict] = []
+        unresolved_required: list[str] = []
+        landmarks: dict[str, tuple[float, float]] = {}
+        resolvable_categories: list[str] = []
+
+        # --- category: 업종 존재 필터 ---
+        if by_type["category"]:
+            for c in by_type["category"]:
+                if facility_repo.resolvable(c.category):
+                    resolvable_categories.append(c.category)
+                else:
+                    unresolved_required.append(c.category)
+            required_counts = {
+                cat: {r.code: facility_repo.count(r.gu, r.dong, cat) for r in raws}
+                for cat in resolvable_categories
+            }
+            if required_counts:
+                pool, cat_disq = scoring.partition_by_required_categories(pool, required_counts)
+                disqualified.extend(cat_disq)
+
+        # --- near: 랜드마크 거리 필터. 같은 group명끼리는 OR, 나머지는 AND ---
+        if by_type["near"]:
+            groups: dict[object, list[FilterClause]] = {}
+            for c in by_type["near"]:
+                groups.setdefault(c.group or object(), []).append(c)
+
+            for members in groups.values():
+                resolved: list[tuple[FilterClause, tuple[float, float]]] = []
+                for c in members:
+                    coord = (facility_repo.locate_place(c.place)
+                             if facility_repo.near_resolvable() else None)
+                    if coord:
+                        landmarks[c.place] = coord
+                        resolved.append((c, coord))
+                    else:
+                        unresolved_required.append(f"{c.place} 근처")
+                if not resolved:
+                    continue
+                centroids = facility_repo.dong_centroids()
+                if len(resolved) == 1:
+                    (c, coord), = resolved
+                    pool, near_disq = scoring.partition_by_proximity(
+                        pool, {c.place: coord}, centroids, c.radius_km or NEAR_RADIUS_KM)
+                    disqualified.extend(near_disq)
+                else:
+                    # OR — 그룹 내 하나라도 만족하면 통과
+                    names = "/".join(c.place for c, _ in resolved)
+                    new_pool, group_disq = [], []
+                    for s in pool:
+                        pt = centroids.get(s.code)
+                        ok = pt is not None and any(
+                            scoring.haversine_km(pt, coord) <= (c.radius_km or NEAR_RADIUS_KM)
+                            for c, coord in resolved
+                        )
+                        (new_pool if ok else group_disq).append(s)
+                    pool = new_pool
+                    disqualified.extend(
+                        {"scores": s, "missing": [f"{names} 중 근처 아님"]} for s in group_disq
+                    )
+
+        # --- gu: 행정구역 포함/제외 (API 불필요, 로컬 데이터만) ---
+        for c in by_type["gu"]:
+            resolved_gu = [g for name in (c.gu or []) for g in GU_ALIASES.get(name, [name])]
+            label = "/".join(c.gu or [])
+            new_pool, gu_disq = [], []
+            for s in pool:
+                ok = (s.gu in resolved_gu) != c.exclude
+                (new_pool if ok else gu_disq).append(s)
+            pool = new_pool
+            reason = f"{label} 제외 대상" if c.exclude else f"{label} 안에 없음"
+            disqualified.extend({"scores": s, "missing": [reason]} for s in gu_disq)
+
+        # --- metric: 지표 임계값 (API 불필요, 로컬 데이터만) ---
+        for c in by_type["metric"]:
+            invert = METRIC_DIRECTIONS.get(c.field)
+            if invert is None:
+                unresolved_required.append(f"{c.field} 조건")
+                continue
+            pool, metric_disq = scoring.partition_by_metric(
+                pool, c.field, METRIC_LEVEL_CUTOFF[c.level], invert, c.level.value)
+            disqualified.extend(metric_disq)
+
+        # 대형병원 필수 — 특수 케이스로 그대로 유지 (rank() 내부 필터가 아니라
+        # 실격 메커니즘으로 처리해야 disqualified/지도에서 안 사라짐).
+        # 전부 미달이면 폴백으로 필터를 생략한다.
+        if args.require_large_hospital:
+            with_hosp = [s for s in pool if s.raw.hosp_cnt >= 1]
+            if with_hosp:
+                disqualified.extend(
+                    {"scores": s, "missing": ["대형병원"]}
+                    for s in pool if s.raw.hosp_cnt < 1
+                )
+                pool = with_hosp
 
         weights = scoring.preference_to_weights(args.preference, args.extra_categories)
         recs = scoring.rank(pool, weights, top_n=args.top_n,
-                            require_large_hospital=args.require_large_hospital,
                             extra_scores=extra_scores)
 
         rec_dicts = [r.model_dump() for r in recs]
@@ -49,6 +183,26 @@ class ToolExecutor:
                 }
 
         result = {"weights": weights, "recommendations": rec_dicts}
+
+        # 지도 핀용 좌표 — 개발자/사용자가 필터 근거를 눈으로 검증할 수 있게.
+        # 랜드마크(근처 기준점) + Kakao로 해석된 필수 업종의 실제 위치.
+        # CSV 출처 업종·gu·metric은 좌표가 없어 핀 없음.
+        map_points = [
+            {"label": name, "lon": lon, "lat": lat, "kind": "landmark"}
+            for name, (lon, lat) in landmarks.items()
+        ]
+        for cat in resolvable_categories:
+            places = facility_repo.places_for(cat)
+            if places:
+                map_points.extend(
+                    {"label": f"{cat}: {name}", "lon": lon, "lat": lat, "kind": "facility"}
+                    for name, lon, lat in places
+                )
+        if map_points:
+            result["map_points"] = map_points
+
+        if unresolved_required:
+            result["unresolved_requirements"] = unresolved_required
         if disqualified:
             result["disqualified"] = [
                 {"code": d["scores"].code, "gu": d["scores"].gu,

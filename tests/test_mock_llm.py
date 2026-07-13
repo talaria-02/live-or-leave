@@ -5,6 +5,10 @@ from app.agent.mock_llm import MockLLM
 from app.schemas.tools import Importance
 
 
+def _required_categories(intent) -> list[str]:
+    return [c.category for c in intent.required_filters if c.type == "category"]
+
+
 def test_two_or_more_keyword_hits_yield_very_high():
     intent = MockLLM().parse_intent("안전하고 무서운 밤길이 걱정돼요")
     assert intent.preference.safety == Importance.VERY_HIGH
@@ -75,7 +79,7 @@ def test_no_facility_keyword_leaves_extra_categories_empty():
 def test_required_section_becomes_hard_filter_not_score():
     text = "필수 요구사항: 헬스장\n선택 요구사항: 안전하고 무서운 밤길 없는 조용한 동네"
     intent = MockLLM().parse_intent(text)
-    assert intent.required_categories == ["헬스장"]
+    assert _required_categories(intent) == ["헬스장"]
     assert "헬스장" not in intent.extra_categories
     assert intent.preference.safety == Importance.VERY_HIGH
     assert intent.preference.environment != Importance.NONE
@@ -84,28 +88,58 @@ def test_required_section_becomes_hard_filter_not_score():
 def test_optional_section_keywords_do_not_leak_into_required():
     text = "필수 요구사항: 버거\n선택 요구사항: 헬스장 있으면 좋겠어요"
     intent = MockLLM().parse_intent(text)
-    assert intent.required_categories == ["버거"]
+    assert _required_categories(intent) == ["버거"]
     assert intent.extra_categories == ["헬스장"]
 
 
 def test_marker_order_can_be_reversed():
     text = "선택 요구사항: 안전하고 무서운 밤길 없는 곳\n필수 요구사항: 헬스장"
     intent = MockLLM().parse_intent(text)
-    assert intent.required_categories == ["헬스장"]
+    assert _required_categories(intent) == ["헬스장"]
     assert intent.preference.safety == Importance.VERY_HIGH
 
 
 def test_no_markers_treats_whole_text_as_optional_backward_compat():
     """마커 없는 자유 문장은 기존처럼 전부 선택(점수화) 요구사항으로 취급된다."""
     intent = MockLLM().parse_intent("헬스장 있는 곳")
-    assert intent.required_categories == []
+    assert _required_categories(intent) == []
     assert intent.extra_categories == ["헬스장"]
 
 
 def test_required_only_with_no_optional_keywords_does_not_trigger_clarification():
     intent = MockLLM().parse_intent("필수 요구사항: 헬스장\n선택 요구사항: ")
     assert intent.needs_clarification is False
-    assert intent.required_categories == ["헬스장"]
+    assert _required_categories(intent) == ["헬스장"]
+
+
+# ---------- gu 필터 (구 포함/제외) ----------
+
+def _gu_clauses(intent):
+    return [c for c in intent.required_filters if c.type == "gu"]
+
+
+def test_gu_mention_becomes_include_clause():
+    intent = MockLLM().parse_intent("필수 요구사항: 강남구 안에서만\n선택 요구사항: 조용한 곳")
+    clauses = _gu_clauses(intent)
+    assert len(clauses) == 1
+    assert clauses[0].gu == ["강남구"] and clauses[0].exclude is False
+
+
+def test_gu_mention_with_exclude_marker_becomes_exclude_clause():
+    intent = MockLLM().parse_intent("필수 요구사항: 강남구는 빼고\n선택 요구사항: 조용한 곳")
+    clauses = _gu_clauses(intent)
+    assert len(clauses) == 1
+    assert clauses[0].gu == ["강남구"] and clauses[0].exclude is True
+
+
+def test_gu_include_and_exclude_can_coexist_as_separate_clauses():
+    text = "필수 요구사항: 강남구 안에서만, 서초구는 제외\n선택 요구사항: 조용한 곳"
+    intent = MockLLM().parse_intent(text)
+    clauses = _gu_clauses(intent)
+    include = [c for c in clauses if not c.exclude]
+    exclude = [c for c in clauses if c.exclude]
+    assert include[0].gu == ["강남구"]
+    assert exclude[0].gu == ["서초구"]
 
 
 # ---------- explain ----------
