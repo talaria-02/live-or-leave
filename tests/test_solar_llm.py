@@ -116,6 +116,7 @@ def test_explain_stream_yields_call_stream_chunks(monkeypatch):
 
 def test_parse_intent_propagates_when_call_raises(monkeypatch):
     """_call 예외는 try/except 바깥에서 일어나므로 그대로 전파된다."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         SolarLLM().parse_intent("아무 문장")
@@ -124,6 +125,7 @@ def test_parse_intent_propagates_when_call_raises(monkeypatch):
 # ---------- parse_intent: _call은 성공했지만 응답이 잘못된 경우 ----------
 
 def test_parse_intent_falls_back_when_response_is_not_json(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, "이건 JSON이 아닙니다")
     intent = SolarLLM().parse_intent("아무 문장")
     assert intent.needs_clarification is True
@@ -132,6 +134,7 @@ def test_parse_intent_falls_back_when_response_is_not_json(monkeypatch):
 
 
 def test_parse_intent_falls_back_when_label_is_invalid(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "극단적으로중요", "convenience": "none",
         "mobility": "none", "environment": "none",
@@ -143,6 +146,7 @@ def test_parse_intent_falls_back_when_label_is_invalid(monkeypatch):
 # ---------- parse_intent: 정상 JSON 응답 ----------
 
 def test_parse_intent_parses_valid_json_response(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "very_high", "convenience": "none",
         "mobility": "medium", "environment": "none",
@@ -157,6 +161,7 @@ def test_parse_intent_parses_valid_json_response(monkeypatch):
 
 
 def test_parse_intent_strips_markdown_code_fence(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, "```json\n" + json.dumps({
         "safety": "none", "convenience": "high",
         "mobility": "none", "environment": "none",
