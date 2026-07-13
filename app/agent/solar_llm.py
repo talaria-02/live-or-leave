@@ -43,6 +43,21 @@ from app.schemas.tools import (
 # 프로젝트 루트의 .env (없으면 조용히 무시됨) — UPSTAGE_API_KEY 등을 여기서 읽는다.
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
+_langfuse_configured = False
+
+
+def _configure_langfuse_tracing() -> None:
+    """LANGFUSE_* 키가 설정된 경우에만 LiteLLM 호출을 Langfuse로 추적한다."""
+    global _langfuse_configured
+    if _langfuse_configured:
+        return
+    _langfuse_configured = True
+    if not os.environ.get("LANGFUSE_PUBLIC_KEY"):
+        return
+    import litellm
+    litellm.success_callback = ["langfuse"]
+    litellm.failure_callback = ["langfuse"]
+
 DEFAULT_MODEL = "solar-pro2-251215"
 DEFAULT_API_BASE = "https://api.upstage.ai/v1"
 
@@ -101,6 +116,7 @@ class SolarLLM:
             raise RuntimeError("UPSTAGE_API_KEY 환경변수가 설정되지 않았습니다.")
 
         import litellm  # 지연 로딩: mock만 쓰는 환경에서는 패키지가 없어도 무방
+        _configure_langfuse_tracing()
 
         resp = litellm.completion(
             model=f"openai/{self.model}",
@@ -120,6 +136,7 @@ class SolarLLM:
             raise RuntimeError("UPSTAGE_API_KEY 환경변수가 설정되지 않았습니다.")
 
         import litellm  # 지연 로딩: mock만 쓰는 환경에서는 패키지가 없어도 무방
+        _configure_langfuse_tracing()
 
         response = litellm.completion(
             model=f"openai/{self.model}",

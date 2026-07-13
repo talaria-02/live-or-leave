@@ -120,15 +120,29 @@ UPSTAGE_API_KEY=본인의_Upstage_API_키
 명시적으로 mock을 주입하세요 (`tests/`가 이 방식을 씁니다 — 그래서 `pytest`는
 키 없이도 항상 빠르게 통과합니다).
 
+### Langfuse 관측 (선택, 운영 안정성)
+
+Solar API 호출(입력·출력·지연시간·비용)을 추적하고 싶으면 `.env`에 아래 3개를
+채우세요. 비워두면 `solar_llm.py`가 조용히 무시하고 평소처럼 동작합니다.
+
+```
+LANGFUSE_PUBLIC_KEY=본인의_Langfuse_Public_Key
+LANGFUSE_SECRET_KEY=본인의_Langfuse_Secret_Key
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+키는 [cloud.langfuse.com](https://cloud.langfuse.com) 가입 → 프로젝트 생성 →
+Settings → API Keys에서 발급받습니다. 채워두면 LiteLLM이 각 Solar 호출을 자동으로
+Langfuse Tracing 대시보드에 전송합니다(코드 추가 수정 불필요).
+
 ## 지금 상태 / 다음 할 일
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
   필수조건 하드필터(`required_categories`), 실제 Upstage Solar API 연동
   (`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`),
   재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`), Docker Compose
-  실행 구성, GitHub Actions CI.
-- 다음(Day4): GCE VM에 Docker Compose로 실제 배포, GitHub Actions 통과 화면 캡처,
-  공개 HTTP URL 확인, Nemotron-Personas-Korea 기반 핵심 시나리오 30개 검증.
+  실행 구성, GitHub Actions CI/CD(GCE VM 자동 배포), Langfuse 기반 LLM 호출 추적.
+- 다음: Nemotron-Personas-Korea 기반 핵심 시나리오 30개 검증, 발표 산출물 정리.
 
 자세한 트러블슈팅·재현 방법·설계 원칙은 [HANDOFF.md](HANDOFF.md)를 참고하세요.
 

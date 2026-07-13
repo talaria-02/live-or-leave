@@ -4,6 +4,9 @@ numpy>=1.24
 pyproj>=3.5
 litellm>=1.0
 tenacity>=8.0  # litellm의 num_retries(재시도) 기능이 내부적으로 필요로 함
+langfuse>=2.0,<3.0  # LANGFUSE_* 환경변수가 있을 때 litellm 호출을 자동 추적.
+                    # litellm의 내장 콜백이 langfuse 3.x/4.x의 OTEL 기반 구조와
+                    # 호환되지 않아(langfuse.version 모듈 제거) 2.x로 고정한다.
 python-dotenv>=1.0
 fastapi>=0.110
 uvicorn>=0.27
