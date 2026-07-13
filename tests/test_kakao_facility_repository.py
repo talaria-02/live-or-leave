@@ -18,6 +18,9 @@ import json
 import pytest
 
 from app.data.kakao_facility_repository import (
+    KAKAO_CATEGORY_CODE,
+    KAKAO_CATEGORY_URL,
+    KAKAO_KEYWORD_URL,
     SEOUL_RECT,
     HybridFacilityRepository,
     KakaoFacilityRepository,
@@ -72,7 +75,7 @@ def test_counts_for_maps_coordinates_to_dongs(tmp_path, square_geojson, monkeypa
         _doc("p4", 9.0, 9.0),   # 경계 밖 → 무시
     ]
     monkeypatch.setattr(KakaoFacilityRepository, "_fetch_page",
-                        lambda self, kw, rect, page: _page(docs, total=4))
+                        lambda self, kw, rect, page, category_code=None: _page(docs, total=4))
     repo = _repo(tmp_path, square_geojson)
 
     assert repo.count("가구", "A동", "클라이밍장") == 2
@@ -84,9 +87,48 @@ def test_duplicate_place_ids_across_pages_counted_once(tmp_path, square_geojson,
     """rect 경계에 걸친 장소가 여러 타일에서 중복 반환돼도 id로 1번만 센다."""
     monkeypatch.setattr(
         KakaoFacilityRepository, "_fetch_page",
-        lambda self, kw, rect, page: _page([_doc("same", 0.5, 0.5), _doc("same", 0.5, 0.5)], total=2))
+        lambda self, kw, rect, page, category_code=None: _page([_doc("same", 0.5, 0.5), _doc("same", 0.5, 0.5)], total=2))
     repo = _repo(tmp_path, square_geojson)
     assert repo.count("가구", "A동", "헬스장") == 1
+
+
+# ---------- Kakao 표준 카테고리(14종) — 키워드 추측 없이 카테고리 검색 ----------
+# _fetch_page 자체가 아니라 그 안의 httpx.get 호출을 가로채서, 실제로 어느
+# 엔드포인트·파라미터로 나가는지(카테고리 vs 키워드) 검증한다.
+
+def _fake_httpx_get(captured, empty_response):
+    def fake_get(url, headers=None, params=None, timeout=None):
+        captured["url"], captured["params"] = url, params
+        return empty_response
+    return fake_get
+
+
+class _EmptyResp:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"documents": [], "meta": {"total_count": 0, "is_end": True}}
+
+
+def test_known_category_name_uses_category_endpoint(tmp_path, square_geojson, monkeypatch):
+    captured = {}
+    monkeypatch.setattr("httpx.get", _fake_httpx_get(captured, _EmptyResp()))
+    _repo(tmp_path, square_geojson).counts_for("약국")
+
+    assert captured["url"] == KAKAO_CATEGORY_URL
+    assert captured["params"]["category_group_code"] == KAKAO_CATEGORY_CODE["약국"] == "PM9"
+    assert "query" not in captured["params"]
+
+
+def test_unknown_keyword_uses_keyword_endpoint(tmp_path, square_geojson, monkeypatch):
+    captured = {}
+    monkeypatch.setattr("httpx.get", _fake_httpx_get(captured, _EmptyResp()))
+    _repo(tmp_path, square_geojson).counts_for("클라이밍")
+
+    assert captured["url"] == KAKAO_KEYWORD_URL
+    assert captured["params"]["query"] == "클라이밍"
+    assert "category_group_code" not in captured["params"]
 
 
 # ---------- places_for: 원본 좌표 로컬 저장 (개발자 검증·지도 핀용) ----------
@@ -94,7 +136,7 @@ def test_duplicate_place_ids_across_pages_counted_once(tmp_path, square_geojson,
 def test_places_for_returns_seoul_places_with_names(tmp_path, square_geojson, monkeypatch):
     docs = [_doc("암장A", 0.5, 0.5), _doc("암장B", 1.5, 0.5), _doc("타지역", 9.0, 9.0)]
     monkeypatch.setattr(KakaoFacilityRepository, "_fetch_page",
-                        lambda self, kw, rect, page: _page(docs, total=3))
+                        lambda self, kw, rect, page, category_code=None: _page(docs, total=3))
     repo = _repo(tmp_path, square_geojson)
     places = repo.places_for("클라이밍")
     assert ("암장A", 0.5, 0.5) in places and ("암장B", 1.5, 0.5) in places
@@ -104,7 +146,7 @@ def test_places_for_returns_seoul_places_with_names(tmp_path, square_geojson, mo
 def test_places_survive_disk_cache_roundtrip(tmp_path, square_geojson, monkeypatch):
     calls = {"n": 0}
 
-    def fake_fetch(self, kw, rect, page):
+    def fake_fetch(self, kw, rect, page, category_code=None):
         calls["n"] += 1
         return _page([_doc("암장A", 0.5, 0.5)], total=1)
 
@@ -128,7 +170,7 @@ def test_legacy_cache_without_places_is_refetched(tmp_path, square_geojson, monk
     repo._cache_path("헬스장").write_text(_json.dumps(legacy), encoding="utf-8")
 
     monkeypatch.setattr(KakaoFacilityRepository, "_fetch_page",
-                        lambda self, kw, rect, page: _page([_doc("짐A", 0.5, 0.5)], total=1))
+                        lambda self, kw, rect, page, category_code=None: _page([_doc("짐A", 0.5, 0.5)], total=1))
     assert repo.places_for("헬스장") == [("짐A", 0.5, 0.5)]
 
 
@@ -137,7 +179,7 @@ def test_legacy_cache_without_places_is_refetched(tmp_path, square_geojson, monk
 def test_search_splits_rect_when_total_exceeds_cap(tmp_path, square_geojson, monkeypatch):
     fetched_rects = []
 
-    def fake_fetch(self, kw, rect, page):
+    def fake_fetch(self, kw, rect, page, category_code=None):
         fetched_rects.append(rect)
         if rect == SEOUL_RECT:
             return _page([], total=100)          # 루트: 45 초과 → 쪼개야 함
@@ -163,7 +205,7 @@ def test_quad_split_covers_parent_rect():
 def test_second_call_hits_disk_cache_without_api(tmp_path, square_geojson, monkeypatch):
     calls = {"n": 0}
 
-    def fake_fetch(self, kw, rect, page):
+    def fake_fetch(self, kw, rect, page, category_code=None):
         calls["n"] += 1
         return _page([_doc("p1", 0.5, 0.5)], total=1)
 
@@ -180,7 +222,7 @@ def test_second_call_hits_disk_cache_without_api(tmp_path, square_geojson, monke
 def test_expired_cache_triggers_refetch(tmp_path, square_geojson, monkeypatch):
     calls = {"n": 0}
 
-    def fake_fetch(self, kw, rect, page):
+    def fake_fetch(self, kw, rect, page, category_code=None):
         calls["n"] += 1
         return _page([_doc("p1", 0.5, 0.5)], total=1)
 
@@ -244,7 +286,7 @@ def test_hybrid_resolvable_depends_on_csv_membership_and_key():
 def test_locate_place_returns_first_result_coordinate(tmp_path, square_geojson, monkeypatch):
     monkeypatch.setattr(
         KakaoFacilityRepository, "_fetch_page",
-        lambda self, kw, rect, page: _page([_doc("univ", 126.95, 37.46), _doc("noise", 127.0, 37.5)], total=2))
+        lambda self, kw, rect, page, category_code=None: _page([_doc("univ", 126.95, 37.46), _doc("noise", 127.0, 37.5)], total=2))
     repo = _repo(tmp_path, square_geojson)
     assert repo.locate_place("서울대") == (126.95, 37.46)
 
@@ -252,7 +294,7 @@ def test_locate_place_returns_first_result_coordinate(tmp_path, square_geojson, 
 def test_locate_place_caches_including_not_found(tmp_path, square_geojson, monkeypatch):
     calls = {"n": 0}
 
-    def fake_fetch(self, kw, rect, page):
+    def fake_fetch(self, kw, rect, page, category_code=None):
         calls["n"] += 1
         return _page([], total=0)
 
@@ -302,7 +344,7 @@ def test_recommend_skips_and_reports_unresolved_required(monkeypatch, sample_raw
     """CSV에 없고 API 키도 없는 필수 업종은 조용히 전 지역 실격시키는 대신
     필터에서 빼고 unresolved_requirements로 보고해야 한다."""
     from app.agent import tools as tools_mod
-    from app.schemas.tools import CategoryPreference, Importance, RecommendTool
+    from app.schemas.tools import CategoryPreference, FilterClause, Importance, RecommendTool
     from tests.conftest import FakeRepo
 
     monkeypatch.setattr(
@@ -314,7 +356,10 @@ def test_recommend_skips_and_reports_unresolved_required(monkeypatch, sample_raw
         preference=CategoryPreference(
             safety=Importance.HIGH, convenience=Importance.NONE,
             mobility=Importance.NONE, environment=Importance.NONE),
-        required_categories=["헬스장", "클라이밍장"],  # 헬스장=CSV, 클라이밍장=해석불가
+        required_filters=[  # 헬스장=CSV, 클라이밍장=해석불가
+            FilterClause(type="category", category="헬스장"),
+            FilterClause(type="category", category="클라이밍장"),
+        ],
     ))
 
     assert result["unresolved_requirements"] == ["클라이밍장"]
@@ -353,7 +398,7 @@ class _FakeNearHybrid:
 
 def test_recommend_applies_near_filter_and_reports_reason(monkeypatch, sample_raws):
     from app.agent import tools as tools_mod
-    from app.schemas.tools import CategoryPreference, Importance, RecommendTool
+    from app.schemas.tools import CategoryPreference, FilterClause, Importance, RecommendTool
     from tests.conftest import FakeRepo
 
     monkeypatch.setattr(tools_mod, "get_hybrid_facility_repository", lambda: _FakeNearHybrid())
@@ -361,7 +406,7 @@ def test_recommend_applies_near_filter_and_reports_reason(monkeypatch, sample_ra
         preference=CategoryPreference(
             safety=Importance.HIGH, convenience=Importance.NONE,
             mobility=Importance.NONE, environment=Importance.NONE),
-        required_near=["서울대"], top_n=3,
+        required_filters=[FilterClause(type="near", place="서울대")], top_n=3,
     ))
 
     assert [r["dong"] for r in result["recommendations"]] == ["A동"]
@@ -378,7 +423,7 @@ def test_recommend_applies_near_filter_and_reports_reason(monkeypatch, sample_ra
 def test_recommend_reports_unresolved_when_landmark_not_found(monkeypatch, sample_raws):
     """좌표를 못 찾은 랜드마크는 전 지역 실격 대신 unresolved로 보고하고 필터 생략."""
     from app.agent import tools as tools_mod
-    from app.schemas.tools import CategoryPreference, Importance, RecommendTool
+    from app.schemas.tools import CategoryPreference, FilterClause, Importance, RecommendTool
     from tests.conftest import FakeRepo
 
     monkeypatch.setattr(tools_mod, "get_hybrid_facility_repository", lambda: _FakeNearHybrid())
@@ -386,9 +431,70 @@ def test_recommend_reports_unresolved_when_landmark_not_found(monkeypatch, sampl
         preference=CategoryPreference(
             safety=Importance.HIGH, convenience=Importance.NONE,
             mobility=Importance.NONE, environment=Importance.NONE),
-        required_near=["존재안하는곳"], top_n=3,
+        required_filters=[FilterClause(type="near", place="존재안하는곳")], top_n=3,
     ))
 
     assert result["unresolved_requirements"] == ["존재안하는곳 근처"]
     assert len(result["recommendations"]) == 3  # 필터 미적용
     assert "disqualified" not in result
+
+
+# ---------- tools 배선: near OR그룹 ----------
+
+class _FakeMultiNearHybrid:
+    """두 랜드마크 — 강남역은 A동 근처, 홍대입구역은 C동 근처. B동은 둘 다 아님."""
+
+    def resolvable(self, category):
+        return True
+
+    def near_resolvable(self):
+        return True
+
+    def locate_place(self, name):
+        return {"강남역": (127.00, 37.50), "홍대입구역": (126.90, 37.40)}.get(name)
+
+    def dong_centroids(self):
+        return {"A1": (127.00, 37.505), "B1": (127.10, 37.60), "C1": (126.905, 37.405)}
+
+
+def test_recommend_near_or_group_passes_if_any_landmark_matches(monkeypatch, sample_raws):
+    from app.agent import tools as tools_mod
+    from app.schemas.tools import CategoryPreference, FilterClause, Importance, RecommendTool
+    from tests.conftest import FakeRepo
+
+    monkeypatch.setattr(tools_mod, "get_hybrid_facility_repository", lambda: _FakeMultiNearHybrid())
+    result = tools_mod.ToolExecutor(FakeRepo(sample_raws)).recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[
+            FilterClause(type="near", place="강남역", group="역세권"),
+            FilterClause(type="near", place="홍대입구역", group="역세권"),
+        ],
+        top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"A동", "C동"}  # 둘 중 하나만 만족해도 통과 (OR)
+    assert result["disqualified"][0]["dong"] == "B동"
+    assert "중 근처 아님" in result["disqualified"][0]["missing"][0]
+
+
+def test_recommend_near_without_group_is_and(monkeypatch, sample_raws):
+    """group이 없으면(또는 서로 다르면) 여러 near 조건 전부 만족해야 한다(AND) —
+    OR그룹 기능이 기존 AND 동작을 깨지 않는지 확인."""
+    from app.agent import tools as tools_mod
+    from app.schemas.tools import CategoryPreference, FilterClause, Importance, RecommendTool
+    from tests.conftest import FakeRepo
+
+    monkeypatch.setattr(tools_mod, "get_hybrid_facility_repository", lambda: _FakeMultiNearHybrid())
+    result = tools_mod.ToolExecutor(FakeRepo(sample_raws)).recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[
+            FilterClause(type="near", place="강남역"),
+            FilterClause(type="near", place="홍대입구역"),
+        ],
+        top_n=3,
+    ))
+    assert result["recommendations"] == []  # 둘 다 만족하는 동 없음 (AND)

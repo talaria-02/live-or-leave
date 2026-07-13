@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 from app.agent.tools import ToolExecutor
-from app.schemas.tools import CategoryPreference, CompareTool, Importance, RecommendTool
+from app.schemas.tools import (
+    CategoryPreference,
+    CompareTool,
+    FilterClause,
+    Importance,
+    MetricLevel,
+    RecommendTool,
+)
 from tests.conftest import FakeRepo
 
 
@@ -128,7 +135,7 @@ def test_recommend_applies_required_category_hard_filter_and_reports_disqualifie
         preference=CategoryPreference(
             safety=Importance.VERY_HIGH, convenience=Importance.NONE,
             mobility=Importance.NONE, environment=Importance.NONE),
-        required_categories=["헬스장"], top_n=3,
+        required_filters=[FilterClause(type="category", category="헬스장")], top_n=3,
     )
     result = executor.recommend(args)
     dongs = {r["dong"] for r in result["recommendations"]}
@@ -148,3 +155,90 @@ def test_recommend_without_required_categories_omits_disqualified_key(sample_raw
     )
     result = executor.recommend(args)
     assert "disqualified" not in result
+
+
+# ---------- gu 필터 (행정구역 포함/제외) — API 호출 없이 로컬 데이터만 ----------
+# sample_raws: A동·B동=강남구, C동=서초구
+
+def test_gu_filter_includes_only_matching_gu(sample_raws):
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    result = executor.recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[FilterClause(type="gu", gu=["강남구"])], top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"A동", "B동"}
+    assert result["disqualified"][0]["dong"] == "C동"
+    assert "강남구 안에 없음" in result["disqualified"][0]["missing"][0]
+
+
+def test_gu_filter_exclude_flips_the_match(sample_raws):
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    result = executor.recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[FilterClause(type="gu", gu=["강남구"], exclude=True)], top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"C동"}
+
+
+def test_gu_filter_resolves_known_alias(sample_raws):
+    """'강남3구' 같은 통칭은 GU_ALIASES로 해석된다 — LLM이 실제 구 이름을
+    몰라도 안전하게 동작 (서초구는 alias 목록에 포함, sample_raws엔 서초구=C동)."""
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    result = executor.recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[FilterClause(type="gu", gu=["강남3구"])], top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"A동", "B동", "C동"}  # 강남3구=강남/서초/송파 → 셋 다 해당
+
+
+# ---------- metric 필터 (지표 임계값) — API 호출 없이 로컬 데이터만 ----------
+# crime_rate: A=10(최저·가장 안전), C=20, B=30(최고·가장 위험)
+
+def test_metric_filter_strict_keeps_only_top_tier(sample_raws):
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    result = executor.recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[FilterClause(type="metric", field="crime_rate", level=MetricLevel.STRICT)],
+        top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"A동"}  # 상위 30% 안 = 가장 안전한 1곳만
+
+
+def test_metric_filter_moderate_is_more_lenient_than_strict(sample_raws):
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    result = executor.recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[FilterClause(type="metric", field="crime_rate", level=MetricLevel.MODERATE)],
+        top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"A동", "C동"}  # 상위 50% 안 = 2곳
+
+
+def test_metric_filter_higher_is_better_field(sample_raws):
+    """park_cnt는 클수록 좋은 지표 — invert 방향이 crime_rate와 반대로 적용돼야 한다.
+    A=10(최다), C=6, B=3(최소)."""
+    executor = ToolExecutor(FakeRepo(sample_raws))
+    result = executor.recommend(RecommendTool(
+        preference=CategoryPreference(
+            safety=Importance.NONE, convenience=Importance.NONE,
+            mobility=Importance.NONE, environment=Importance.NONE),
+        required_filters=[FilterClause(type="metric", field="park_cnt", level=MetricLevel.STRICT)],
+        top_n=3,
+    ))
+    dongs = {r["dong"] for r in result["recommendations"]}
+    assert dongs == {"A동"}  # 공원 가장 많은 곳(=상위 30%)만 통과

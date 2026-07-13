@@ -13,7 +13,7 @@ import types
 import pytest
 
 from app.agent.solar_llm import SolarLLM
-from app.schemas.tools import Importance
+from app.schemas.tools import Importance, MetricLevel
 
 
 def _stub_call(monkeypatch, response: str):
@@ -180,38 +180,97 @@ def test_parse_intent_extracts_extra_categories_within_closed_set(monkeypatch):
     assert intent.extra_categories == ["버거"]  # 닫힌 집합 밖은 걸러짐
 
 
-def test_parse_intent_accepts_open_keywords_for_required_categories(monkeypatch):
+def _clause_type(intent, t):
+    return [c for c in intent.required_filters if c.type == t]
+
+
+def test_parse_intent_accepts_open_keywords_for_category_clauses(monkeypatch):
     """필수 업종은 extra와 달리 닫힌 집합 필터를 통과하지 않는다 — CSV 밖 시설
     ('클라이밍장' 등)은 Kakao 좌표검색으로 해석되므로 열린 키워드 그대로 보존."""
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_categories": ["클라이밍장", " 도서관 ", "", "클라이밍장"],
+        "required_filters": [
+            {"type": "category", "category": " 클라이밍장 "},
+            {"type": "category", "category": "도서관"},
+            {"type": "category", "category": ""},
+            {"type": "category", "category": "클라이밍장"},
+        ],
     }))
     intent = SolarLLM().parse_intent("클라이밍장이랑 도서관 꼭 있어야 해요")
-    assert intent.required_categories == ["클라이밍장", "도서관"]  # 공백 정리·중복·빈값 제거
+    cats = [c.category for c in _clause_type(intent, "category")]
+    assert cats == ["클라이밍장", "도서관"]  # 공백 정리·중복·빈값 제거
 
 
-def test_parse_intent_separates_required_near_from_required_categories(monkeypatch):
-    """'서울대 근처'는 거리 필터(required_near)로만 — LLM이 지시를 어기고
-    required_categories에도 중복시키면 코드가 걸러내야 한다 (이름 매칭
-    노이즈 필터가 되는 걸 방지)."""
+def test_parse_intent_separates_near_from_category_clause(monkeypatch):
+    """'서울대 근처'는 거리 필터(near)로만 — LLM이 지시를 어기고 같은 이름을
+    category에도 중복시키면 코드가 걸러내야 한다 (이름 매칭 노이즈 필터 방지)."""
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_categories": ["서울대", "클라이밍"],
-        "required_near": ["서울대"],
+        "required_filters": [
+            {"type": "category", "category": "서울대"},
+            {"type": "category", "category": "클라이밍"},
+            {"type": "near", "place": "서울대"},
+        ],
     }))
     intent = SolarLLM().parse_intent("서울대 근처에 클라이밍장 있는 곳")
-    assert intent.required_near == ["서울대"]
-    assert intent.required_categories == ["클라이밍"]  # 중복 제거됨
+    assert [c.place for c in _clause_type(intent, "near")] == ["서울대"]
+    assert [c.category for c in _clause_type(intent, "category")] == ["클라이밍"]  # 중복 제거됨
 
 
-def test_parse_intent_caps_required_categories_at_five(monkeypatch):
+def test_parse_intent_caps_total_filter_clauses(monkeypatch):
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_categories": [f"업종{i}" for i in range(10)],
+        "required_filters": [
+            {"type": "category", "category": f"업종{i}"} for i in range(20)
+        ],
     }))
     intent = SolarLLM().parse_intent("이것저것 다 필요해요")
-    assert len(intent.required_categories) == 5
+    assert len(intent.required_filters) == 8
+
+
+def test_parse_intent_near_radius_and_group(monkeypatch):
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_filters": [
+            {"type": "near", "place": "강남역", "group": "역세권"},
+            {"type": "near", "place": "홍대입구역", "group": "역세권"},
+        ],
+    }))
+    intent = SolarLLM().parse_intent("강남역이나 홍대입구역 중 아무데나 가까우면")
+    near = _clause_type(intent, "near")
+    assert {c.place for c in near} == {"강남역", "홍대입구역"}
+    assert {c.group for c in near} == {"역세권"}
+
+
+def test_parse_intent_gu_include_and_exclude(monkeypatch):
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_filters": [{"type": "gu", "gu": ["강남구", "서초구"], "exclude": False}],
+    }))
+    intent = SolarLLM().parse_intent("강남구나 서초구 안에서만")
+    gu = _clause_type(intent, "gu")[0]
+    assert gu.gu == ["강남구", "서초구"] and gu.exclude is False
+
+
+def test_parse_intent_metric_clause_valid_field_and_level(monkeypatch):
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_filters": [{"type": "metric", "field": "crime_rate", "level": "strict"}],
+    }))
+    intent = SolarLLM().parse_intent("치안 꽤 좋은 곳만")
+    metric = _clause_type(intent, "metric")[0]
+    assert metric.field == "crime_rate" and metric.level == MetricLevel.STRICT
+
+
+def test_parse_intent_metric_clause_rejects_unknown_field(monkeypatch):
+    """화이트리스트 밖 field는 조용히 버려진다 — LLM이 임의 문자열을 지어내도
+    안전하게 무시(필터 전체 파싱 실패로 번지지 않음)."""
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_filters": [{"type": "metric", "field": "존재하지않는필드", "level": "strict"}],
+    }))
+    intent = SolarLLM().parse_intent("아무 조건")
+    assert _clause_type(intent, "metric") == []
 
 
 # ---------- explain ----------

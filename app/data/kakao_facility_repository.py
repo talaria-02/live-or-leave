@@ -37,8 +37,19 @@ DEFAULT_GEOJSON = _ROOT / "dong_boundaries.geojson"
 DEFAULT_CACHE_DIR = _ROOT / "dataset" / "kakao_cache"
 
 KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
 # 서울 전체 bbox (lon_min, lat_min, lon_max, lat_max) — 타일링 시작점
 SEOUL_RECT = (126.734, 37.413, 127.270, 37.715)
+
+# Kakao 표준 카테고리 그룹코드(14종 대분류) — 이 이름으로 요청되면 키워드 검색
+# 대신 카테고리 검색을 쓴다. 키워드 추측(동의어 매핑) 없이 정확하고, 결과가
+# 이미 거리순 정렬돼서 온다. 목록 밖 이름은 기존 키워드 검색으로 그대로 처리.
+KAKAO_CATEGORY_CODE: dict[str, str] = {
+    "대형마트": "MT1", "편의점": "CS2", "학교": "SC4", "학원": "AC5",
+    "주차장": "PK6", "주유소": "OL7", "지하철역": "SW8", "은행": "BK9",
+    "문화시설": "CT1", "관광명소": "AT4", "숙박": "AD5", "음식점": "FD6",
+    "카페": "CE7", "병원": "HP8", "약국": "PM9",
+}
 PAGE_SIZE = 15
 MAX_PAGE = 3          # Kakao는 rect당 최대 45건(15×3)까지만 노출
 MAX_DEPTH = 6         # 사분할 재귀 한도 (4^6 = 최대 4096타일, 실제로는 밀도 높은 곳만 쪼개짐)
@@ -124,7 +135,11 @@ class KakaoFacilityRepository:
         if not self.available():
             raise RuntimeError("KAKAO_REST_API_KEY 환경변수가 설정되지 않았습니다.")
 
-        found = self._search_all(keyword)
+        # 표준 카테고리(14종)면 카테고리 검색으로 — 키워드 추측 없이 정확하고
+        # 거리순 정렬까지 온다. 캐시 키(디스크 파일명)는 그대로 사람이 부른
+        # 이름 기준이라 호출부(HybridFacilityRepository 등)는 이 분기를 몰라도 된다.
+        category_code = KAKAO_CATEGORY_CODE.get(keyword)
+        found = self._search_all(keyword, category_code)
         counts: dict[tuple[str, str], int] = {}
         places: list[list] = []  # [장소명, lon, lat] — 서울 행정동 매핑된 것만
         index = self._get_dong_index()
@@ -215,47 +230,55 @@ class KakaoFacilityRepository:
 
     # ---- Kakao API (rect 사분할 타일링) ----
 
-    def _search_all(self, keyword: str) -> list[tuple[str, float, float]]:
-        """서울 bbox 전체에서 keyword의 모든 (장소명, 좌표) 수집. 장소 id로 중복 제거."""
+    def _search_all(
+        self, keyword: str, category_code: str | None = None
+    ) -> list[tuple[str, float, float]]:
+        """서울 bbox 전체에서 (장소명, 좌표) 전부 수집. 장소 id로 중복 제거.
+        category_code가 있으면 카테고리 검색(정확·거리순), 없으면 키워드 검색."""
         seen: dict[str, tuple[str, float, float]] = {}
-        self._search_rect(keyword, SEOUL_RECT, depth=0, seen=seen)
+        self._search_rect(keyword, category_code, SEOUL_RECT, depth=0, seen=seen)
         return list(seen.values())
 
-    def _search_rect(self, keyword, rect, depth, seen) -> None:
-        docs, total = self._fetch_rect(keyword, rect)
+    def _search_rect(self, keyword, category_code, rect, depth, seen) -> None:
+        docs, total = self._fetch_rect(keyword, category_code, rect)
         if total > MAX_PAGE * PAGE_SIZE and depth < MAX_DEPTH:
             for sub in _quad_split(rect):
-                self._search_rect(keyword, sub, depth + 1, seen)
+                self._search_rect(keyword, category_code, sub, depth + 1, seen)
             return
         for d in docs:
             seen[d["id"]] = (d.get("place_name", ""), float(d["x"]), float(d["y"]))
 
-    def _fetch_rect(self, keyword, rect) -> tuple[list[dict], int]:
+    def _fetch_rect(self, keyword, category_code, rect) -> tuple[list[dict], int]:
         """rect 안에서 최대 45건 페이지네이션. (documents, total_count) 반환."""
         docs: list[dict] = []
         total = 0
         for page in range(1, MAX_PAGE + 1):
-            body = self._fetch_page(keyword, rect, page)
+            body = self._fetch_page(keyword, rect, page, category_code)
             docs.extend(body["documents"])
             total = body["meta"]["total_count"]
             if body["meta"]["is_end"]:
                 break
         return docs, total
 
-    def _fetch_page(self, keyword: str, rect: tuple, page: int) -> dict:
-        """실제 HTTP 1회. 테스트에서 이 메서드만 monkeypatch하면 네트워크가 끊긴다."""
+    def _fetch_page(
+        self, keyword: str, rect: tuple, page: int, category_code: str | None = None
+    ) -> dict:
+        """실제 HTTP 1회. 테스트에서 이 메서드만 monkeypatch하면 네트워크가 끊긴다.
+        category_code가 있으면 카테고리 검색 엔드포인트, 없으면 키워드 검색."""
         import httpx
 
+        url = KAKAO_CATEGORY_URL if category_code else KAKAO_KEYWORD_URL
+        params = {
+            "rect": f"{rect[0]},{rect[1]},{rect[2]},{rect[3]}",
+            "page": page,
+            "size": PAGE_SIZE,
+        }
+        params["category_group_code" if category_code else "query"] = (
+            category_code or keyword
+        )
         resp = httpx.get(
-            KAKAO_KEYWORD_URL,
-            headers={"Authorization": f"KakaoAK {self.api_key}"},
-            params={
-                "query": keyword,
-                "rect": f"{rect[0]},{rect[1]},{rect[2]},{rect[3]}",
-                "page": page,
-                "size": PAGE_SIZE,
-            },
-            timeout=10.0,
+            url, headers={"Authorization": f"KakaoAK {self.api_key}"},
+            params=params, timeout=10.0,
         )
         resp.raise_for_status()
         return resp.json()
@@ -284,8 +307,8 @@ class HybridFacilityRepository:
     - CSV에 있는 업종(닫힌 집합): 기존 FacilityRepository 그대로 — API 0 call
     - CSV에 없는 열린 키워드: KakaoFacilityRepository (키 없으면 resolvable=False)
 
-    tools.py는 required_categories 중 resolvable하지 않은 항목을 필터에서 빼고
-    결과에 unresolved로 표시한다 — 전 지역 실격(카운트 전부 0) 같은 조용한
+    tools.py는 category 타입 FilterClause 중 resolvable하지 않은 항목을 필터에서
+    빼고 결과에 unresolved로 표시한다 — 전 지역 실격(카운트 전부 0) 같은 조용한
     오동작을 막기 위함.
     """
 

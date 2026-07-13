@@ -47,7 +47,7 @@ class RecommendationAgent:
         intent = self.llm.parse_intent(user_text)
         trace.append(f"[step {steps}] parse_intent → {intent.preference.model_dump()} "
                      f"(hospital={intent.require_large_hospital}, "
-                     f"required={intent.required_categories}, near={intent.required_near}, "
+                     f"filters={[c.model_dump(exclude_none=True) for c in intent.required_filters]}, "
                      f"extra={intent.extra_categories}, "
                      f"clarify={intent.needs_clarification})")
 
@@ -68,8 +68,7 @@ class RecommendationAgent:
             preference=intent.preference,
             require_large_hospital=intent.require_large_hospital,
             extra_categories=intent.extra_categories,
-            required_categories=intent.required_categories,
-            required_near=intent.required_near,
+            required_filters=intent.required_filters,
             top_n=top_n,
         )
         result = self.tools.recommend(tool_args)
@@ -108,7 +107,7 @@ class RecommendationAgent:
             intent = self.llm.parse_intent(user_text)
             trace.append(f"[step {steps}] parse_intent → {intent.preference.model_dump()} "
                          f"(hospital={intent.require_large_hospital}, "
-                         f"required={intent.required_categories}, near={intent.required_near}, "
+                         f"filters={[c.model_dump(exclude_none=True) for c in intent.required_filters]}, "
                          f"extra={intent.extra_categories}, "
                          f"clarify={intent.needs_clarification})")
 
@@ -129,8 +128,7 @@ class RecommendationAgent:
                 preference=intent.preference,
                 require_large_hospital=intent.require_large_hospital,
                 extra_categories=intent.extra_categories,
-                required_categories=intent.required_categories,
-                required_near=intent.required_near,
+                required_filters=intent.required_filters,
                 top_n=top_n,
             )
             result = self.tools.recommend(tool_args)
