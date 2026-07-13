@@ -192,6 +192,7 @@ def _clause_type(intent, t):
 def test_parse_intent_accepts_open_keywords_for_category_clauses(monkeypatch):
     """필수 업종은 extra와 달리 닫힌 집합 필터를 통과하지 않는다 — CSV 밖 시설
     ('클라이밍장' 등)은 Kakao 좌표검색으로 해석되므로 열린 키워드 그대로 보존."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [
@@ -209,6 +210,7 @@ def test_parse_intent_accepts_open_keywords_for_category_clauses(monkeypatch):
 def test_parse_intent_separates_near_from_category_clause(monkeypatch):
     """'서울대 근처'는 거리 필터(near)로만 — LLM이 지시를 어기고 같은 이름을
     category에도 중복시키면 코드가 걸러내야 한다 (이름 매칭 노이즈 필터 방지)."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [
@@ -225,6 +227,7 @@ def test_parse_intent_separates_near_from_category_clause(monkeypatch):
 def test_parse_intent_caps_total_filter_clauses(monkeypatch):
     """near는 category처럼 텍스트-존재 검증(explicitly_requested_categories)을
     타지 않으므로, 캡 자체만 순수하게 검증하기에 적합하다."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [
@@ -236,6 +239,7 @@ def test_parse_intent_caps_total_filter_clauses(monkeypatch):
 
 
 def test_parse_intent_near_radius_and_group(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [
@@ -250,6 +254,7 @@ def test_parse_intent_near_radius_and_group(monkeypatch):
 
 
 def test_parse_intent_gu_include_and_exclude(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [{"type": "gu", "gu": ["강남구", "서초구"], "exclude": False}],
@@ -260,6 +265,7 @@ def test_parse_intent_gu_include_and_exclude(monkeypatch):
 
 
 def test_parse_intent_metric_clause_valid_field_and_level(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [{"type": "metric", "field": "crime_rate", "level": "strict"}],
@@ -272,6 +278,7 @@ def test_parse_intent_metric_clause_valid_field_and_level(monkeypatch):
 def test_parse_intent_metric_clause_rejects_unknown_field(monkeypatch):
     """화이트리스트 밖 field는 조용히 버려진다 — LLM이 임의 문자열을 지어내도
     안전하게 무시(필터 전체 파싱 실패로 번지지 않음)."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [{"type": "metric", "field": "존재하지않는필드", "level": "strict"}],
