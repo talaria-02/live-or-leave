@@ -116,6 +116,7 @@ def test_explain_stream_yields_call_stream_chunks(monkeypatch):
 
 def test_parse_intent_propagates_when_call_raises(monkeypatch):
     """_call 예외는 try/except 바깥에서 일어나므로 그대로 전파된다."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         SolarLLM().parse_intent("아무 문장")
@@ -124,6 +125,7 @@ def test_parse_intent_propagates_when_call_raises(monkeypatch):
 # ---------- parse_intent: _call은 성공했지만 응답이 잘못된 경우 ----------
 
 def test_parse_intent_falls_back_when_response_is_not_json(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, "이건 JSON이 아닙니다")
     intent = SolarLLM().parse_intent("아무 문장")
     assert intent.needs_clarification is True
@@ -132,6 +134,7 @@ def test_parse_intent_falls_back_when_response_is_not_json(monkeypatch):
 
 
 def test_parse_intent_falls_back_when_label_is_invalid(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "극단적으로중요", "convenience": "none",
         "mobility": "none", "environment": "none",
@@ -143,6 +146,7 @@ def test_parse_intent_falls_back_when_label_is_invalid(monkeypatch):
 # ---------- parse_intent: 정상 JSON 응답 ----------
 
 def test_parse_intent_parses_valid_json_response(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, json.dumps({
         "safety": "very_high", "convenience": "none",
         "mobility": "medium", "environment": "none",
@@ -157,6 +161,7 @@ def test_parse_intent_parses_valid_json_response(monkeypatch):
 
 
 def test_parse_intent_strips_markdown_code_fence(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
     _stub_call(monkeypatch, "```json\n" + json.dumps({
         "safety": "none", "convenience": "high",
         "mobility": "none", "environment": "none",
@@ -167,7 +172,7 @@ def test_parse_intent_strips_markdown_code_fence(monkeypatch):
 
 class _FakeFacilityRepo:
     def categories(self):
-        return {"버거", "헬스장"}
+        return {"버거", "헬스장", "편의점", "세무사", "카페", "종합병원"}
 
 
 def test_parse_intent_extracts_extra_categories_within_closed_set(monkeypatch):
@@ -218,10 +223,12 @@ def test_parse_intent_separates_near_from_category_clause(monkeypatch):
 
 
 def test_parse_intent_caps_total_filter_clauses(monkeypatch):
+    """near는 category처럼 텍스트-존재 검증(explicitly_requested_categories)을
+    타지 않으므로, 캡 자체만 순수하게 검증하기에 적합하다."""
     _stub_call(monkeypatch, json.dumps({
         "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
         "required_filters": [
-            {"type": "category", "category": f"업종{i}"} for i in range(20)
+            {"type": "near", "place": f"장소{i}"} for i in range(20)
         ],
     }))
     intent = SolarLLM().parse_intent("이것저것 다 필요해요")
@@ -271,6 +278,87 @@ def test_parse_intent_metric_clause_rejects_unknown_field(monkeypatch):
     }))
     intent = SolarLLM().parse_intent("아무 조건")
     assert _clause_type(intent, "metric") == []
+
+
+def test_parse_intent_drops_category_clause_not_explicitly_mentioned_in_text(monkeypatch):
+    """intent_sanitizer의 배경정보 추론 방지 가드가 required_filters의 category
+    절에도 적용돼야 한다(extra_categories와 동일 규칙) — 텍스트에 실제로
+    없는 업종명은 LLM이 필수 필터로 지어내도 걸러진다."""
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
+        "required_filters": [
+            {"type": "category", "category": "헬스장"},   # 텍스트에 실제 언급됨 → 유지
+            {"type": "category", "category": "세무사"},   # 언급 안 됨(배경 추론) → 제거
+        ],
+    }))
+    intent = SolarLLM().parse_intent("저는 회계사이고 헬스장 다니는 동네였으면 해요")
+    cats = [c.category for c in intent.required_filters if c.type == "category"]
+    assert cats == ["헬스장"]
+
+
+def test_parse_intent_drops_inferred_extra_categories_not_explicitly_requested(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "very_high", "convenience": "high",
+        "mobility": "very_high", "environment": "medium",
+        "extra_categories": ["편의점", "세무사"],
+        "needs_clarification": False,
+    }))
+
+    intent = SolarLLM().parse_intent(
+        "저는 회계사이고 야근이 잦고 차가 없어서 밤에도 안전하게 귀가할 수 있는 동네를 찾고 싶어요."
+    )
+
+    assert intent.extra_categories == []
+
+
+def test_parse_intent_keeps_explicitly_requested_extra_category(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "high",
+        "mobility": "none", "environment": "high",
+        "extra_categories": ["헬스장"],
+        "needs_clarification": False,
+    }))
+
+    intent = SolarLLM().parse_intent("헬스장에 자주 가고 공원도 가까운 동네")
+
+    assert intent.extra_categories == ["헬스장"]
+
+
+def test_parse_intent_large_hospital_requires_explicit_large_hospital_word(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "none", "convenience": "very_high",
+        "mobility": "high", "environment": "none",
+        "require_large_hospital": True,
+        "needs_clarification": False,
+    }))
+
+    generic = SolarLLM().parse_intent("부모님 병원 접근성이 좋고 대중교통이 편한 곳")
+    explicit = SolarLLM().parse_intent("부모님 때문에 대형병원이 꼭 가까운 곳")
+
+    assert generic.require_large_hospital is False
+    assert explicit.require_large_hospital is True
+
+
+def test_parse_intent_forces_clarification_for_vague_fit_request(monkeypatch):
+    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
+    _stub_call(monkeypatch, json.dumps({
+        "safety": "high", "convenience": "high",
+        "mobility": "high", "environment": "medium",
+        "extra_categories": ["세무사", "편의점"],
+        "needs_clarification": False,
+    }))
+
+    intent = SolarLLM().parse_intent(
+        "저는 회계사이고 현재 주거는 전·월세예요. 너무 삭막하지 않고 제 생활이랑 잘 맞는 동네면 좋겠어요."
+    )
+
+    assert intent.needs_clarification is True
+    assert intent.extra_categories == []
+    assert intent.clarify_question
 
 
 # ---------- explain ----------
@@ -370,3 +458,35 @@ def test_explain_includes_extra_facility_status_and_caveat(monkeypatch):
     SolarLLM().explain("버거집 있는 곳", result)
     assert "요청 업종 현황" in captured["user"]
     assert "행정동에 등록된 업소 수 기준" in captured["user"]
+
+
+def test_explain_prompt_includes_unsupported_requirement_limits(monkeypatch):
+    captured = {}
+
+    def fake_call(self, system, user):
+        captured["system"] = system
+        captured["user"] = user
+        return "설명"
+
+    monkeypatch.setattr(SolarLLM, "_call", fake_call)
+
+    SolarLLM().explain("조용하고 방음이 잘 되고 공원이 가까운 곳", _fake_result())
+
+    assert "현재 데이터로 직접 평가할 수 없는 사용자 요구" in captured["user"]
+    assert "조용함/소음/방음" in captured["user"]
+    assert "소음도" in captured["user"]
+    assert "별도 한계/보완 데이터" in captured["system"]
+
+
+def test_explain_prompt_does_not_treat_current_jeonse_context_as_price_requirement(monkeypatch):
+    captured = {}
+
+    def fake_call(self, system, user):
+        captured["user"] = user
+        return "설명"
+
+    monkeypatch.setattr(SolarLLM, "_call", fake_call)
+
+    SolarLLM().explain("현재 주거는 전·월세예요. 공원이 가까운 곳", _fake_result())
+
+    assert "월세/전세/주거비" not in captured["user"]

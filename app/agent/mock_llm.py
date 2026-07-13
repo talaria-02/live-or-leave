@@ -13,6 +13,10 @@ from __future__ import annotations
 import re
 
 from app.agent.tools import GU_ALIASES, SEOUL_GU
+from app.agent.unsupported_requirements import (
+    detect_unsupported_requirements,
+    format_unsupported_requirements,
+)
 from app.schemas.domain import CATEGORY_CAVEATS
 from app.schemas.tools import (
     CategoryPreference,
@@ -201,6 +205,12 @@ class MockLLM:
             caveats.append("직접 요청하신 업종은 반경 1km가 아니라 해당 행정동에 등록된 업소 수 기준입니다.")
         if caveats:
             lines.append("[데이터 안내]\n" + "\n".join(f"※ {c}" for c in caveats))
+        unsupported = detect_unsupported_requirements(user_text)
+        if unsupported:
+            lines.append(
+                "[현재 데이터 한계]\n"
+                + format_unsupported_requirements(unsupported)
+            )
         return "\n\n".join(lines)
 
     def explain_stream(self, user_text: str, result: dict):

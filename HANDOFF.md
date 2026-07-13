@@ -31,11 +31,12 @@
   시작된 상태이므로 HTTP 에러 대신 `{"type": "error", "message": ...}` 이벤트로
   실패를 알린다 (`RecommendationAgent.stream()`이 예외를 절대 밖으로 던지지 않음).
 - **필수/선택 요구사항 분리 완성**: `ParsedIntent`/`RecommendTool`에
-  `required_categories`(하드 필터, AND 조건)와 `extra_categories`(점수화)가 분리돼
+  `required_filters`(하드 필터, AND 조건)와 `extra_categories`(점수화)가 분리돼
   있다. `mock_llm.py`는 `"필수 요구사항:"`/`"선택 요구사항:"` 마커로 텍스트를
   나눠 각각 다르게 처리(마커 없으면 전부 선택으로 취급, 하위호환). 하드필터에
-  걸린 동은 `scoring.partition_by_required_categories()`가 "왜 떨어졌는지"
-  (`missing` 목록)까지 함께 반환 — UI가 이유를 보여줄 수 있음.
+  걸린 동은 각 필터 실행 함수가 "왜 떨어졌는지"(`missing` 목록)까지 함께
+  반환 — UI가 이유를 보여줄 수 있음. (아래 "필수조건 필터 일반화" 항목이
+  이 스키마를 category/near/gu/metric 4종으로 확장한 최신 상태.)
 - **임의 업종 조회 완성**: `app/data/facility_repository.py`가
   `dataset/소상공인시장진흥공단_상가(상권)정보_서울.csv`(원본, gitignore됨)를
   (자치구,행정동,업종소분류) 카운트로 집계해 지연 로딩 싱글턴으로 캐시한다.
@@ -53,10 +54,12 @@
   - `KakaoFacilityRepository` — 서울 bbox 검색(45건 초과 시 rect 4분할 재귀),
     shapely point-in-polygon으로 좌표→행정동 매핑, 키워드별 디스크 캐시(TTL 7일,
     원본 장소 좌표까지 함께 저장해 지도 핀·검증용으로 재사용).
-  - `required_near`(예: "서울대 근처") — 업종 존재 필터와는 다른 의미론. 장소
-    좌표 1개만 찾아 동 중심점과의 거리(`NEAR_RADIUS_KM`, 현재 3km)로 하드
-    필터한다. 이름 매칭(예: "서울대" 상호 890곳 매칭)과 섞으면 엉뚱한 동이
-    통과하는 버그가 났었음 — 그래서 분리.
+  - "서울대 근처" 같은 거리 요구(현재는 `FilterClause(type="near", ...)`, 도입 당시
+    이름은 `required_near`) — 업종 존재 필터와는 다른 의미론. 장소 좌표 1개만
+    찾아 동 중심점과의 거리(`NEAR_RADIUS_KM`, 현재 3km)로 하드 필터한다. 이름
+    매칭(예: "서울대" 상호 890곳 매칭)과 섞으면 엉뚱한 동이 통과하는 버그가
+    났었음 — 그래서 분리(아래 "필수조건 필터 일반화" 항목에서 이 필드명 자체는
+    `required_filters`로 다시 통합됨).
   - `HybridFacilityRepository` — CSV 보유 업종은 CSV 그대로(API 호출 0),
     미보유 키워드만 Kakao로 폴백. 해석 불가(CSV에도 없고 API 키도 없음)한
     필수조건은 조용히 전 지역을 실격시키는 대신 필터를 생략하고
@@ -78,27 +81,67 @@
 - **`main.py`/`streamlit_app.py` 구조 통합**: 자세한 내용은 아래 "다음 할 일"
   1번(해결됨) 참고. 요지는 `app/agent/factory.py`로 mock 폴백 판단과
   `top_n` 처리를 공유해 두 앱이 같은 입력에 항상 같은 결정을 내리게 한 것.
-- **흐름 검증 테스트 통과**: `python -m pytest tests/` (180개, 전부 MockLLM
-  기반 + Kakao/네트워크는 monkeypatch로 격리라 API 키 없이도 빠르게 실행됨).
+- **필수조건 필터 일반화 완성**: `required_categories`(업종)/`required_near`(거리)
+  낱개 필드를 계속 늘리는 대신 `required_filters: list[FilterClause]`(타입:
+  category/near/gu/metric) 하나로 통합했다. `app/agent/tools.py`가 type별로
+  디스패치:
+  - `near`는 `group`으로 OR 그룹 지원(예: "강남역이나 홍대입구역 중 아무데나").
+  - `gu`(행정구역 포함/제외, "강남3구" 같은 통칭은 `GU_ALIASES`로 해석)와
+    `metric`(지표 백분위 임계값, `METRIC_DIRECTIONS`로 방향성 등록)이 신규 —
+    둘 다 로컬 데이터만으로 되는 필터라 API 호출 0회.
+  - Kakao Local의 표준 카테고리(14종, `PM9`=약국·`SW8`=지하철역 등) 검색도
+    지원 — 키워드가 매칭되면 추측성 키워드 검색 대신 정확한 카테고리 검색으로
+    자동 전환.
+- **의도 파싱 안티할루시네이션 가드 통합**: 팀원이 작업한
+  `app/agent/intent_sanitizer.py`(배경 정보로 업종·대형병원을 지어내는 것
+  방지, 모호한 질의 되묻기 강제)와 `app/agent/unsupported_requirements.py`
+  (월세·학군·소음·채광·반려동물·주차처럼 현재 스키마로 아예 검증 불가능한
+  요구를 감지해 설명에 한계로 명시)를 위 `required_filters`의 category 타입에도
+  동일하게 적용(`explicitly_requested_categories`가 `extra_categories`뿐 아니라
+  category 절도 텍스트-존재 검증). 애매함 강제 되묻기는 gu/near/metric처럼
+  구체적 필터가 이미 하나라도 파싱됐으면 걸지 않도록 조건 추가(안 그러면 그
+  휴리스틱이 새 필터 타입을 몰라 정상 요청도 되묻기로 튕길 수 있었음).
+- **Streamlit 지도 UI + 필수조건 하드필터 초기 버전**: 서울 425개 행정동을
+  지도에 5단계(상위/차상위/저점수/필수조건미충족/중립)로 색칠해 보여주는
+  최초 구현(이후 "Streamlit UI 전면 개편"으로 위성/다크 지도·풀스크린
+  레이아웃으로 교체됨).
+- **Day4 배포 준비**: `Dockerfile`, `docker-compose.yml`, `.dockerignore`,
+  `.env.example`, `.github/workflows/ci.yml`/`cd.yml`, `docs/deploy-gce.md`
+  추가. FastAPI(8000)와 Streamlit(8501)을 같은 Docker 이미지에서 command만
+  바꿔 실행. GitHub Actions가 push/PR마다 테스트+빌드를 돌리고, main 브랜치
+  push 시 GCE VM 자동 배포(CD)까지 연결됨(아래 "다음 할 일" 2·3번 참고).
+- **페르소나 기반 시나리오 샘플링 완료**: `QUTUMENT/nemotron-personas-korea-extended`
+  (NVIDIA Nemotron-Personas-Korea 확장판 미러, CC BY 4.0)에서 전체 Parquet를
+  내려받지 않고 Hugging Face 원격 Parquet row group을 읽어 서울 중심 샘플을 생성했다.
+  `data/personas/persona_sample_probe.csv`(50행), `persona_sample_500.csv`(500행),
+  `persona_sample_stratified.csv`(3,000행)가 있으며, `data/personas/README.md`에
+  출처·라이선스·재현 명령·컬럼 정책을 적어두었다. 이 샘플을 기반으로 만든
+  "핵심 검증 시나리오 30개"까지 완료(아래 "페르소나 시나리오 설계 기준" 절 참고).
+- **흐름 검증 테스트 통과**: `python -m pytest tests/` (206개, 전부 MockLLM
+  기반 + Kakao/네트워크는 monkeypatch로 격리라 API 키·네트워크 없이도 빠르게 실행됨).
 
 ## 파일 지도
 
 ```
-main.py                  # FastAPI 컨트롤러. GET /health, GET /recommend(SSE)
-streamlit_app.py         # Streamlit UI — 지도+필수/선택 입력 (아래 "Streamlit UI 직접 확인하기" 참고)
+main.py                  # FastAPI 컨트롤러. GET /health, GET /recommend(SSE, top_n=)
+scripts/
+  sample_qutument_personas.py  # QUTUMENT Extended 원격 Parquet에서 서울 중심 샘플 생성
+  build_persona_scenarios.py   # 샘플 → 후보 질문/커버리지 감사/최종 30개 생성
 app/
   schemas/
     domain.py      # DongRawMetrics, DongScores, Recommendation, CATEGORY_CAVEATS(가공방식 각주)
-    tools.py       # Importance(4단계 라벨), CategoryPreference, ParsedIntent, 도구 스키마
-                   # (extra_categories=점수화, required_categories=하드필터)
+    tools.py       # Importance(4단계 라벨), CategoryPreference, ParsedIntent, FilterClause,
+                   # MetricLevel 등 도구 스키마 (extra_categories=점수화, required_filters=하드필터)
   services/
-    scoring.py     # 결정론적 계산: 분위수 정규화·스코어링·순위·필수업종 필터(+탈락사유)
+    scoring.py     # 결정론적 계산: 분위수 정규화·스코어링·순위·필수조건 필터(+탈락사유)
   agent/
     solar_llm.py   # ★ 프로덕션 기본 LLM. Upstage Solar API를 LiteLLM 경유로 호출(스트리밍 지원) ★
     mock_llm.py    # 키워드 매칭 스텁. 이제는 테스트 전용(RecommendationAgent(llm=MockLLM()))
-    tools.py       # ToolExecutor: 도구를 scoring 서비스에 위임, 임의/필수 업종 카운트 조회
+    tools.py       # ToolExecutor: 도구를 scoring 서비스에 위임, FilterClause type별 디스패치
     loop.py        # ReAct 흐름 오케스트레이터. run(top_n=)=완성된 결과, stream(top_n=)=SSE용 제너레이터
-    factory.py     # main.py/streamlit_app.py가 공유하는 mock 판단·에이전트 생성 (신규)
+    factory.py     # main.py/streamlit_app.py가 공유하는 mock 판단·에이전트 생성
+    unsupported_requirements.py  # 현재 데이터로 직접 검증 불가한 사용자 요구 감지
+    intent_sanitizer.py          # LLM 의도 출력 후처리(업종 과잉 추론 방지, 모호 질의 보정)
   data/
     csv_repository.py            # dong_metrics.csv를 읽어 DongRawMetrics로 공급
     facility_repository.py       # 임의/필수 업종(상가업소) 조회 — dataset/ 원본 CSV 필요, 지연 캐시
@@ -109,6 +152,18 @@ dong_metrics.csv          # 행정동 지표 테이블 (빌더 산출물, 커밋
 dong_boundaries.geojson   # 행정동 경계 (지도 UI용, 커밋됨, 0.4MB)
 seoul_gu.geojson          # 자치구 경계 (참고용, 미사용)
 demo.py                   # 시나리오 데모 실행 (실제 Solar API 사용, .env 필요)
+streamlit_app.py          # 지도 UI. 키 있으면 Solar, 없으면 자동 mock, USE_MOCK_LLM=1로 강제 mock
+                          # (화면 전체 지도+우측 오버레이 패널, 아래 "지도 UI 직접 확인하기" 참고)
+data/personas/
+  README.md                         # 페르소나 샘플 출처·라이선스·재현 명령
+  persona_schema_notes.md           # 51개 원본 컬럼 확인 및 probe 요약
+  persona_sample_probe.csv          # 50행 schema/품질 probe
+  persona_sample_500.csv            # 빠른 검토용 서울 중심 500행 샘플
+  persona_sample_stratified.csv     # 시나리오 생성용 서울 중심 3,000행 샘플
+  persona_relevant_pool.csv         # 주거 추천 신호가 강한 페르소나 500개
+  persona_scenario_candidates.csv   # 후보 질문 84개
+  data_coverage_audit.csv           # 후보별 현재 스키마 커버리지 태깅
+  persona_scenarios_30.csv          # 발표/검증용 최종 30개
 .env                      # UPSTAGE_API_KEY 등 (gitignore됨, 각자 로컬에 개별 생성)
 dataset/                  # 원본 공공데이터 (gitignore됨, ~160MB, data.seoul.go.kr 등에서 재확보)
 space_info/               # 원본 행정동 shapefile+코드표 (gitignore됨, 지도 재생성용)
@@ -118,6 +173,252 @@ tests/test_agent_factory.py      # app/agent/factory.py 공유 로직 테스트
 tests/test_kakao_facility_repository.py  # Kakao 저장소 + '근처' 거리 필터 테스트 (네트워크 없이, monkeypatch)
 tests/test_streamlit_app.py      # streamlit_app.py 고유 로직(캐싱·지도 완전성) 테스트
 ```
+
+## 페르소나 시나리오 설계 기준 (발표 검증용)
+
+멘토링 피드백의 핵심은 "서비스가 기존 서비스와 어떻게 다르고, 실제 사용자 요구를
+현재 데이터 스키마가 얼마나 커버하는지"를 보여주는 것이다. 그래서 시나리오 30개는
+임의 예시가 아니라, QUTUMENT Extended 샘플에서 뽑은 합성 페르소나를 바탕으로
+만든 **대표 사용자 요구 검증셋**이어야 한다.
+
+### 현재 샘플링 상태
+
+- 원본: `QUTUMENT/nemotron-personas-korea-extended`
+  - NVIDIA `Nemotron-Personas-Korea` 기반 확장판 미러.
+  - CC BY 4.0. 발표/README에 출처와 라이선스를 반드시 표기한다.
+  - 합성 페르소나이며 실제 개인 데이터가 아니다.
+- 원본 데이터셋은 51개 컬럼, 1,000,000행이다.
+- 현재 CSV 샘플은 51개 전체 컬럼을 모두 저장하지 않고, 시나리오 생성에 필요한
+  원본 컬럼 36개만 읽었다. 컬럼명은 바꾸지 않았다.
+- 분석 편의를 위해 파생 컬럼 5개를 추가했다:
+  `age_group`, `occupation_group`, `housing_group`, `income_group`, `is_seoulish`.
+- 지역 필터는 `district` 값의 `서울-노원구` 같은 문자열을 기준으로 했다.
+  원본에 `province` 컬럼은 없으므로 summary에서 `province=unknown`으로 나오는 것은 정상이다.
+- `persona_sample_stratified.csv`는 서울 관련 행 3,000개이며, 샘플 전체 크기는
+  `data/personas/` 기준 약 23MB라 팀 시연 재현을 위해 git에 포함하기로 했다.
+
+### 샘플링/선별 논리
+
+**1. 3,000개 샘플은 서울 사람 중 단순 랜덤인가?**
+
+아니다. 정확히는 **서울 필터 + 재현 가능한 셔플 + 약한 층화 샘플링**이다.
+
+- `district`에 `서울-...`이 들어간 행만 `is_seoulish=True`로 보고 필터링했다.
+- 전체 Parquet를 내려받지 않고 Hugging Face 원격 Parquet row group을 읽었다.
+- row group 순서와 row 순서를 `seed=42`로 섞어 매번 같은 결과가 나오게 했다.
+- `age_group`, `family_type`, `occupation_group`, `housing_group`, `income_group`
+  조합을 층화 키로 사용해 특정 조합이 너무 빨리 샘플을 독점하지 않게 했다.
+
+따라서 이 샘플은 통계 추정을 위한 완전무작위 표본이라기보다, 발표/시나리오 생성을 위한
+**서울 중심 재현 가능 층화 샘플**이다.
+
+**2. 500개 relevant pool은 무엇을 주거 추천 신호로 봤는가?**
+
+`scripts/build_persona_scenarios.py`가 페르소나 텍스트(`persona`, `detailed_persona`,
+`family_persona`, `finance_persona`, `healthcare_persona`, 취미/직업 텍스트 등)를 보고
+아래 신호를 태깅한다.
+
+- `runner_active`: 러닝, 산책, 등산, 헬스, 운동, 배드민턴, 요가 등
+- `pet`: 반려견, 반려동물, 강아지, 고양이 등
+- `creative_freelance`: 화가, 작가, 디자이너, 프리랜서, 사진, 음악, 예술, 창작 등
+- `mobility`: 출퇴근, 야근, 지하철, 버스, 대중교통, 통근, 퇴근 등
+- `night_safety`: 야근, 밤, 안전, 늦은 귀가 등
+- `health_hospital`: 병원, 건강, 혈압, 혈당, 당뇨, 고혈압, 보건소, 무릎 등
+- `parent_care`: 부모, 어머니, 아버지, 조모, 고령, 돌봄 등
+- `quiet_focus`: 조용함, 방음, 재택, 집에서 집중, 소음, 작업 등
+- `rent_budget`: 월세, 전세, 대출, 내 집 마련, 생활비, 경제적 부담, 수입 등
+- `convenience`: 마트, 편의점, 배달, 카페, 식당, 외식, 장보기 등
+- `family_school`: 자녀, 학교, 보육, 아이, 학원, 어린이 등
+
+이 신호를 쓴 이유는 두 가지다.
+
+- 현재 서비스가 가진 지표(`안전`, `편의`, `이동`, `환경`, 상권 업종 추가)에 자연스럽게
+  매핑되는 사용자 요구를 찾기 위해서.
+- 동시에 현재 부족한 데이터(`월세/전세`, 실제 통근시간, 소음/방음, 남향/채광,
+  반려동물 인프라, 학교/어린이집)를 드러내는 질문도 의도적으로 확보하기 위해서.
+
+즉 500개는 "주거 추천 질문으로 전환했을 때 데이터 스키마를 검증할 가치가 큰
+페르소나"를 추린 것이다.
+
+**3. 84개 후보와 최종 30개는 어떻게 만들었는가?**
+
+흐름은 다음과 같다.
+
+1. `persona_sample_stratified.csv`의 3,000개 서울 샘플을 읽는다.
+2. 각 페르소나에 주거 추천 신호를 태깅하고 점수를 매긴다.
+3. 점수가 높은 500개를 `persona_relevant_pool.csv`로 저장한다.
+4. 라이프스타일/부족 데이터/되묻기 유형을 반영한 템플릿으로 질문 후보 84개를 만든다.
+   이때 질문마다 원본 페르소나의 연령대, 직업, 거주 구, 가족 형태, 주거 점유를
+   앞부분에 붙여 실제 사용자 맥락처럼 보이게 했다.
+5. 각 질문에 필요한 데이터 필드와 현재 서비스 카테고리를 붙인다.
+   예: 야근+밤길 → `crime_rate`, `cctv_cnt`, `bus_cnt`, `subway_access`.
+6. 각 질문을 `answerable`, `partial`, `not_answerable`, `clarify`로 태깅한다.
+7. 최종 30개는 발표 검증 목적에 맞춰 아래 비율로 선별한다.
+   - `answerable`: 18개
+   - `partial`: 8개
+   - `not_answerable`: 1개
+   - `clarify`: 3개
+
+이 과정의 핵심은 "데이터셋에서 자동으로 떨어진 질문 30개"가 아니라
+**데이터셋 근거가 있는 질문 후보를 만들고, 현재 서비스의 데이터 커버리지 검증 목적에 맞게
+큐레이션한 30개**라는 점이다.
+
+### 최종 30개 시나리오의 우선순위
+
+사용자가 최종 발표에서 강조하고 싶은 대상은 단순 "평균적인 이사 수요자"가 아니라,
+**집값에는 잘 반영되지 않지만 자기 생활에서 중요한 세부 조건이 뚜렷한 사람들**이다.
+따라서 시나리오 생성 시 아래 유형을 우선한다.
+
+1. **라이프스타일이 확고한 MZ/1인 직장인 계열**
+   - 러너, 헬스장 이용자, 공원·산책 루틴이 강한 사람
+   - 반려동물 양육자
+   - 프리랜서, 창작자, 화가, 재택근무자
+   - 이동성 중시자(차 없음, 야근, 대중교통 의존)
+2. **1인 가구가 아니어도 세부 주거 요구가 선명한 사람**
+   - 남향·채광을 중요하게 보는 사람
+   - 방음·조용함을 중요하게 보는 사람
+   - 밤길 안정감, 생활 동선, 병원 접근성을 중요하게 보는 사람
+3. **발표 데모에 쓰기 좋은 생활 편의형**
+   - 부모님 병원 접근성
+   - 헬스장/공원 가까운 동네
+   - 카페·마트·편의점·배달 등 일상 루틴이 뚜렷한 동네 선호
+
+### 30개 구성 비율
+
+최종 30개는 원본 분포를 그대로 따르는 것이 아니라, 발표와 데이터 스키마 검증 목적에
+맞게 후보군에서 큐레이션한다. 권장 비율은 다음과 같다.
+
+- **현재 스키마로 답변 가능**: 18개
+  - 안전, 편의, 이동, 환경, 병원, 공원, 헬스장/카페/버거집 같은 상권 업종으로
+    현재 코드가 처리할 수 있는 질문.
+- **부분 가능/부족 데이터 발견**: 9개
+  - 월세·전세 시세, 실제 통근시간, 소음, 반려동물 인프라, 남향·채광, 방음 등
+    지금 스키마에 없거나 약한 요구.
+- **되묻기 필요**: 3개
+  - "그냥 살기 좋은 데", "너무 복잡하지 않은 곳"처럼 의도가 모호해
+    `needs_clarification=True`가 자연스러운 질문.
+
+이 비율은 충분히 컨트롤 가능하다. 방법은 3,000개 샘플에서 후보 질문 60~100개를 먼저
+만들고, 각 후보를 `answerable` / `partial` / `not_answerable`로 태깅한 뒤 위 비율에
+맞춰 최종 30개를 고르는 것이다. 즉 "데이터셋에서 자동으로 떨어진 30개"가 아니라,
+"데이터셋 근거가 있는 후보를 서비스 검증 목적에 맞게 선별한 30개"로 설명한다.
+
+### 부족 데이터 처리 방침
+
+부족 데이터는 지금 바로 전부 mock으로 넣지 않는다. 먼저 시나리오 후보를 만들고,
+실제로 자주 등장하거나 발표 설득력이 큰 부족 항목만 골라 처리한다.
+
+- 월세·전세 시세: 당장은 정밀 실거래가가 아니라 행정동/자치구별 중위값 또는
+  경향 정도의 mock/보조 지표로 가볍게 반영하는 방향.
+- 실제 통근시간: 중요도가 높지만 API/교통망 계산이 필요하므로 mock 또는 향후 확장 후보.
+- 소음/방음: 집값에 잘 드러나지 않는 중요한 요구라 발표 설득력은 높다.
+  데이터가 없으면 mock 또는 "현재 스키마 부족" 사례로 남긴다.
+- 반려동물 인프라: 동물병원, 반려동물 카페/미용 등 상권 데이터로 일부 가능할 수 있어
+  우선 후보를 확인한다.
+- 남향·채광: 공공 행정동 지표로는 직접 답하기 어렵다. 현재 MVP 범위를 넘는
+  세부 매물/건물 데이터 필요 항목으로 분류한다.
+
+### 다음 산출물
+
+시나리오 작업의 1차 산출물은 생성 완료됐다. 재생성 명령은 다음과 같다.
+
+```bash
+.venv/bin/python scripts/build_persona_scenarios.py
+```
+
+생성된 파일은 아래 4개다.
+
+- `data/personas/persona_relevant_pool.csv`: 3,000개 중 주거 추천에 강한 후보 페르소나.
+- `data/personas/persona_scenario_candidates.csv`: 질문 후보 84개.
+- `data/personas/data_coverage_audit.csv`: 각 질문의 요구 데이터와 현재 스키마 커버리지.
+- `data/personas/persona_scenarios_30.csv`: 발표/검증용 최종 30개.
+
+현재 `persona_scenarios_30.csv`는 다음 비율로 구성되어 있다.
+
+- `answerable`: 18개
+- `partial`: 8개
+- `not_answerable`: 1개
+- `clarify`: 3개
+
+즉 부족 데이터 계열은 총 9개(`partial`+`not_answerable`)로 맞춰져 있다. 최종 발표 전에는
+이 30개 중 데모에 쓸 3~5개를 직접 실행해 보고, Solar 응답이 약한 문장은 질문 문장이나
+mock 데이터 계획을 조정해야 한다.
+
+### 시나리오 테스트 1차 결과와 수정 사항
+
+`F01`, `F03`, `F04`, `F19`, `F28`을 실제 Solar 경로로 수동 테스트했다.
+
+- `F03`(헬스장+공원), `F04`(부모님 병원 접근성)는 데모 후보로 적합했다.
+- `F01`(안전+이동)은 대체로 맞지만, 별도 업종 추출이 과한 경우가 있어 추후
+  extra category 프롬프트 개선 여지가 있다.
+- `F19`(조용함/방음+공원)는 공원은 반영했지만, 방음/소음 데이터가 없다는 한계를
+  설명하지 않아 수정이 필요했다.
+- `F28`(모호한 질문)은 되묻기 대신 추천으로 흘러가서, 추후 clarify 기준 개선이 필요하다.
+
+이번 수정에서는 먼저 **unsupported 조건 처리**를 강화했다.
+
+- 새 모듈: `app/agent/unsupported_requirements.py`
+- 감지 대상:
+  - 조용함/소음/방음
+  - 월세/전세/주거비(단, "현재 주거는 전·월세" 같은 배경 설명은 제외)
+  - 실제 목적지 기반 통근시간
+  - 남향/채광/일조
+  - 반려동물 친화도
+  - 학군/학교/어린이집
+  - 주차 편의
+- `SolarLLM._build_explain_prompt()`가 감지된 항목을
+  "현재 데이터로 직접 평가할 수 없는 사용자 요구"로 프롬프트에 넣는다.
+- `_EXPLAIN_SYSTEM`에 해당 항목은 추천 근거로 추정하지 말고, 별도 한계/보완 데이터로
+  반드시 설명하라고 명시했다.
+- `MockLLM.explain()`도 같은 감지 로직을 사용해 `[현재 데이터 한계]` 블록을 붙인다.
+
+수정 이유: 발표/멘토링 대응에서 중요한 포인트는 "없는 데이터를 지어내지 않는다"는 점이다.
+방음, 소음, 남향, 실제 통근시간처럼 행정동 공공지표로 직접 검증할 수 없는 요구는
+추천 자체를 막지는 않되, 설명에서 현재 데이터 한계와 추가/mock 데이터 필요성을 분리해
+말해야 한다.
+
+검증:
+
+```bash
+.venv/bin/python -m pytest tests/test_solar_llm.py tests/test_mock_llm.py
+```
+
+현재 결과: 52 passed.
+
+이후 추가로 **extra category 과잉 추출과 모호 질의 보정**을 적용했다.
+
+문제:
+
+- `F01`처럼 안전+이동만 요청한 질문에서 Solar가 `편의점`을 extra category로 넣었다.
+- `F28`처럼 "회계사"라는 직업 배경이 들어간 모호한 질문에서 Solar가 `세무사` 업종을
+  추론해 추천으로 진행했다.
+- `F04`처럼 단순히 병원 접근성을 말한 질문에서 `대형병원 필수`로 과하게 해석될 수 있었다.
+
+수정:
+
+- 새 모듈: `app/agent/intent_sanitizer.py`
+- `SolarLLM.parse_intent()` 후처리에서 LLM이 반환한 `extra_categories`와
+  `required_categories`를 다시 검증한다.
+- 업종은 사용자가 텍스트에 실제로 말한 경우만 남긴다.
+  - 유지 예: "헬스장", "카페", "버거집", "동물병원"
+  - 제거 예: "회계사" → `세무사`, "편의가 좋다" → `편의점`
+- `require_large_hospital`은 "대형병원", "종합병원", "큰 병원", "상급종합병원" 같은
+  표현이 있을 때만 유지한다. 단순 "병원 접근성"은 편의/병원 지표로 처리한다.
+- "잘 맞는", "괜찮은", "살기 좋은", "삭막하지 않은"처럼 모호한 표현만 있고
+  안전/교통/편의/환경/시설/예산 같은 구체 요구가 없으면 `needs_clarification=True`로 강제한다.
+- "현재 주거는 전·월세" 같은 배경 설명은 월세/전세 시세 요구로 보지 않는다.
+
+수정 이유: LLM이 사용자 배경(직업, 가족 형태, 현재 주거)에서 시설 요구를 추론하면,
+결정론적 스코어링에 엉뚱한 가중치가 들어가 추천이 흔들린다. 시설 업종은 사용자가
+명시적으로 말한 경우에만 도구 입력으로 넘기고, 모호한 질문은 추천보다 되묻기를 우선해야 한다.
+
+검증:
+
+```bash
+.venv/bin/python -m pytest tests/
+```
+
+현재 결과: 136 passed, 1 warning.
 
 ## 절대 바꾸면 안 되는 설계 원칙 (이유 포함)
 
@@ -156,7 +457,7 @@ tests/test_streamlit_app.py      # streamlit_app.py 고유 로직(캐싱·지도
    흐름은 입구→백엔드→출구로 고정. LLM이 여러 도구를 자율 연쇄 호출하는
    구조는 의도적으로 배제(오버엔지니어링). 되묻기 1회만 agentic 분기.
 
-## 다음 할 일 (우선순위 순)
+## 다음 할 일 (Day4, 우선순위 순)
 
 1. ~~**`main.py`(FastAPI/SSE)와 `streamlit_app.py`가 완전히 분리돼 있음.**~~ **해결됨.**
    두 앱을 각각 별도 프로세스로 유지하기로 결정(HTTP로 합치지 않음 — 네트워크
@@ -171,28 +472,49 @@ tests/test_streamlit_app.py      # streamlit_app.py 고유 로직(캐싱·지도
      500개 동네 수치를 통째로 실어보내게 됨) — `run()`은 원래 이렇게 했고 `stream()`도
      이제 맞춤.
    - 환경변수 `STREAMLIT_USE_MOCK_LLM` → `USE_MOCK_LLM`으로 개명(더 이상
-     Streamlit 전용이 아니므로).
+     Streamlit 전용이 아니므로 — `.env.example`도 이 이름으로 맞출 것).
    - 각자 `RecommendationAgent()`를 새로 생성하던 것은 그대로 둠(프로세스별
      독립 인스턴스가 맞는 설계라 판단 — `factory.get_recommendation_agent()`가
      `main.py`용 프로세스 싱글턴, `factory.build_recommendation_agent()`가
      Streamlit의 `@st.cache_resource`가 감싸는 순수 생성 함수).
    - 테스트: `tests/test_agent_factory.py`(공유 로직), `tests/test_main.py`/
      `tests/test_loop.py`에 `top_n` 케이스 추가.
-2. **GCP 배포** ($300 크레딧). MVP 마무리. `dong_boundaries.geojson`/`dong_metrics.csv`는
-   이미 커밋돼 있어 `dataset/`·`space_info/`(원본, gitignore) 없이도 두 앱 다 바로 뜬다.
-3. **반경 1km 적절성 검증.** 큰 행정동(진관동·상계동)에서 부족할 수 있음.
-   시설별 다른 반경(편의점 500m, 병원 1.5km) 실험.
-4. **(사소함, 언제든) `dong_metrics.csv`의 병합행정동 7개 이름 인코딩 수정.**
+2. ~~**Docker 멀티스테이지 빌드 + docker compose 1차 구성.**~~ **완료.**
+   - `Dockerfile`: Python 3.12 slim 기반 멀티스테이지 빌드.
+   - `docker-compose.yml`: `api`(FastAPI, 8000)와 `ui`(Streamlit, 8501)를 같은 이미지에서
+     command만 바꿔 실행.
+   - `.env.example`: `UPSTAGE_API_KEY`, `SOLAR_MODEL`, `UPSTAGE_API_BASE`,
+     `USE_MOCK_LLM` 분리.
+   - `.dockerignore`: `.env`, 가상환경, 원본 `dataset/`, 페르소나 분석 산출물을 이미지에서 제외.
+3. **GCE VM에 docker compose로 실제 배포 + GitHub Actions CD.**
+   - `.github/workflows/ci.yml`이 push/PR마다 `python -m pytest tests/`와
+     `docker build -t live-or-leave:ci .`를 실행.
+   - `.github/workflows/cd.yml`(별도 분리)이 main 브랜치 push 시 GCE VM에 자동 배포.
+   - GCE 방화벽에서 TCP 8000(API), 8501(Streamlit UI)을 열어야 외부 접속 가능.
+     절차는 `docs/deploy-gce.md`에 정리됨.
+   - **주의**: 이번 병합으로 `main.py`의 `GET /recommend`가 `top_n` 쿼리 파라미터를
+     새로 받고 `/health`가 `mock_llm` 필드를 추가로 반환하게 됐다 — 배포된 API를
+     쓰는 프론트가 있다면 하위호환 확인할 것(둘 다 기존 필드는 그대로 유지되는
+     추가라 문제 없을 것으로 예상되지만, 실제 배포 후 확인 필요).
+4. **핵심 시나리오 30개 구성** — `QUTUMENT/nemotron-personas-korea-extended`
+   서울 중심 샘플을 기반으로 현실적인 질문 후보를 만들고, 현재 스키마 커버리지
+   (`answerable`/`partial`/`not_answerable`)를 태깅한 뒤 실제 Solar API 대상으로 검증.
+   (자세한 방법론은 위 "페르소나 시나리오 설계 기준" 절 참고.)
+5. **(선택, 가점) LLMOps 운영 안정성 개선 1종 이상 적용.**
+6. **반경 1km 적절성 검증.** 큰 행정동(진관동·상계동)에서 부족할 수 있음.
+   시설별 다른 반경(편의점 500m, 병원 1.5km) 실험. (Kakao "근처" 필터의
+   `NEAR_RADIUS_KM`도 같은 종류의 근사 오차를 안고 있음 — 아래 "알려진 한계" 참고.)
+7. **(사소함, 언제든) `dong_metrics.csv`의 병합행정동 7개 이름 인코딩 수정.**
    "상계3·4동" 같은 이름이 "상계3?4동"으로 깨져 있음 — 서울시 상권분석서비스
    원본 자체의 배포 시점 손실(우리 버그 아님, 자세한 근거는 세션 기록 참고).
    `build_dong_boundaries.py`의 `NAME_FIXES` 딕셔너리에 이미 정답이 있으니,
    그걸로 `dong_metrics.csv`도 고치면 다른 곳(explain 등)에서도 깨진 이름이
    안 보임. 지금은 지도 생성 시에만 보정되고 원본 CSV는 그대로.
-5. **(보류 중, 메모리에 기록됨) "내 동네 진단" + `CompareTool` 버그 수정.**
+8. **(보류 중, 메모리에 기록됨) "내 동네 진단" + `CompareTool` 버그 수정.**
    현재 주소를 채점해 다른 동네와 비교하는 기능. `agent/tools.py`의
    `CompareTool`이 `gu_a`/`gu_b`를 실제로는 dong 이름으로만 조회하는
    버그가 있음(죽은 코드라 지금은 무해). 착수 시 이것부터 고칠 것.
-6. **(여유 있으면) 실패 케이스 처리 고도화.** 지금은 `num_retries=2`로 초기
+9. **(여유 있으면) 실패 케이스 처리 고도화.** 지금은 `num_retries=2`로 초기
    연결 실패만 자동 재시도한다. 스트리밍 도중 끊기는 경우(청크 일부만 받고
    중단)에 대한 재개 로직은 아직 없음 — MVP 범위에선 우선순위 낮음.
 
@@ -224,6 +546,19 @@ data.seoul.go.kr 등 서울 열린데이터광장에서 재다운로드하거나
 
 주의: `build_dong_metrics.py`는 원본 공공데이터 CSV들이 `dataset/` 아래 있어야
 동작한다. `dong_metrics.csv`는 이미 생성돼 있으므로, 앱만 돌릴 거면 빌더는 실행 불필요.
+
+Docker Compose 실행:
+
+```bash
+cp .env.example .env
+# .env에 UPSTAGE_API_KEY 입력
+docker compose up -d --build
+curl http://127.0.0.1:8000/health
+```
+
+`http://127.0.0.1:8000`은 FastAPI, `http://127.0.0.1:8501`은 Streamlit 지도 UI다.
+실제 Solar 경로에서 임의 업종 조회까지 보여주려면 VM/로컬 프로젝트 루트의 `dataset/`
+원본 CSV가 docker compose volume으로 `/app/dataset`에 마운트되어야 한다.
 
 ## 알려진 한계 / 주의
 
