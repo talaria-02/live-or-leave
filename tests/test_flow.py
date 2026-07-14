@@ -51,15 +51,6 @@ def test_clarification():
     print("✓ 모호한 입력 → 되묻기")
 
 
-def test_hospital_filter():
-    repo = CsvDongRepository()
-    scores = scoring.score_dongs(repo.all_metrics())
-    w = {"safety": 0, "convenience": 1.0, "mobility": 0, "environment": 0}
-    recs = scoring.rank(scores, w, top_n=425, require_large_hospital=True)
-    assert all(r.scores.raw.hosp_cnt >= 1 for r in recs)
-    print(f"✓ 대형병원 필터 (통과 {len(recs)}개 동, 전부 병원≥1)")
-
-
 def test_deterministic():
     agent = _agent()
     t = "안전하고 지하철 가까운 곳"
@@ -74,6 +65,5 @@ if __name__ == "__main__":
     test_within_gu_discrimination()
     test_preference_changes_ranking()
     test_clarification()
-    test_hospital_filter()
     test_deterministic()
     print("\n모든 흐름 검증 통과")

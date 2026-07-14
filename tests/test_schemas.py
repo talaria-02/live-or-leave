@@ -59,7 +59,7 @@ def test_parsed_intent_defaults():
     pref = CategoryPreference(safety=Importance.NONE, convenience=Importance.NONE,
                                mobility=Importance.NONE, environment=Importance.NONE)
     intent = ParsedIntent(preference=pref)
-    assert intent.require_large_hospital is False
+    assert intent.extra_categories == []
     assert intent.needs_clarification is False
     assert intent.clarify_question is None
 

@@ -139,8 +139,9 @@ Langfuse Tracing 대시보드에 전송합니다(코드 추가 수정 불필요)
 ## 지금 상태 / 다음 할 일
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
-  필수조건 하드필터(`required_filters` — 업종/거리/행정구역 3종,
-  Kakao Local API 연동), 실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM
+  필수조건 하드필터(`required_filters` — 거리(근처)/행정구역 2종. 구·기준
+  장소는 UI 구조화 입력에서 직접 만들어지고 LLM은 관여하지 않는다. Kakao
+  Local API 연동, 기준 장소는 후보 여러 개 중 직접 선택), 실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM
   경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`), 재시도를 포함한 실패 처리,
   Streamlit 지도 UI(`streamlit_app.py`, 위성/다크 풀스크린 지도), Docker Compose
   실행 구성, GitHub Actions CI/CD(GCE VM 자동 배포), Langfuse 기반 LLM 호출 추적,

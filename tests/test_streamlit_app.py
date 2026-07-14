@@ -10,6 +10,8 @@ load_agent는 @st.cache_resource가 걸려 있어 테스트 간 캐시가 새면
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import streamlit_app
@@ -90,20 +92,20 @@ def test_assign_tiers_renders_every_disqualified_dong():
 
 def test_run_agent_cached_calls_llm_only_once_for_same_input(monkeypatch):
     """Streamlit rerun마다 같은 텍스트로 parse_intent+explain이 재호출되는 걸
-    막는 게 이 캐시의 존재 이유다. 같은 (텍스트, mock여부) 키로 두 번 불러도
-    agent.run은 한 번만 실행돼야 한다."""
+    막는 게 이 캐시의 존재 이유다. 같은 (텍스트, mock여부, 필터) 키로 두 번
+    불러도 agent.run은 한 번만 실행돼야 한다."""
     monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
     calls = {"n": 0}
     real_run = streamlit_app.RecommendationAgent.run
 
-    def counting_run(self, user_text, top_n=3):
+    def counting_run(self, user_text, top_n=3, required_filters=None):
         calls["n"] += 1
-        return real_run(self, user_text, top_n=top_n)
+        return real_run(self, user_text, top_n=top_n, required_filters=required_filters)
 
     monkeypatch.setattr(streamlit_app.RecommendationAgent, "run", counting_run)
     v = streamlit_app.PIPELINE_VERSION
-    streamlit_app.run_agent_cached("필수 요구사항: \n선택 요구사항: 안전한 곳", False, v)
-    streamlit_app.run_agent_cached("필수 요구사항: \n선택 요구사항: 안전한 곳", False, v)
+    streamlit_app.run_agent_cached("안전한 곳", False, v, "[]")
+    streamlit_app.run_agent_cached("안전한 곳", False, v, "[]")
     assert calls["n"] == 1
 
 
@@ -114,14 +116,14 @@ def test_run_agent_cached_distinguishes_mock_flag_in_cache_key(monkeypatch):
     calls = {"n": 0}
     real_run = streamlit_app.RecommendationAgent.run
 
-    def counting_run(self, user_text, top_n=3):
+    def counting_run(self, user_text, top_n=3, required_filters=None):
         calls["n"] += 1
-        return real_run(self, user_text, top_n=top_n)
+        return real_run(self, user_text, top_n=top_n, required_filters=required_filters)
 
     monkeypatch.setattr(streamlit_app.RecommendationAgent, "run", counting_run)
     v = streamlit_app.PIPELINE_VERSION
-    streamlit_app.run_agent_cached("필수 요구사항: \n선택 요구사항: 안전한 곳", True, v)
-    streamlit_app.run_agent_cached("필수 요구사항: \n선택 요구사항: 안전한 곳", False, v)
+    streamlit_app.run_agent_cached("안전한 곳", True, v, "[]")
+    streamlit_app.run_agent_cached("안전한 곳", False, v, "[]")
     assert calls["n"] == 2
 
 
@@ -132,13 +134,32 @@ def test_run_agent_cached_invalidates_on_pipeline_version_bump(monkeypatch):
     calls = {"n": 0}
     real_run = streamlit_app.RecommendationAgent.run
 
-    def counting_run(self, user_text, top_n=3):
+    def counting_run(self, user_text, top_n=3, required_filters=None):
         calls["n"] += 1
-        return real_run(self, user_text, top_n=top_n)
+        return real_run(self, user_text, top_n=top_n, required_filters=required_filters)
 
     monkeypatch.setattr(streamlit_app.RecommendationAgent, "run", counting_run)
-    streamlit_app.run_agent_cached("필수 요구사항: \n선택 요구사항: 안전한 곳", False, 1)
-    streamlit_app.run_agent_cached("필수 요구사항: \n선택 요구사항: 안전한 곳", False, 2)
+    streamlit_app.run_agent_cached("안전한 곳", False, 1, "[]")
+    streamlit_app.run_agent_cached("안전한 곳", False, 2, "[]")
+    assert calls["n"] == 2
+
+
+def test_run_agent_cached_distinguishes_required_filters_in_cache_key(monkeypatch):
+    """구조화 필터(구·기준 장소)가 다르면 같은 선호 텍스트라도 재실행돼야
+    한다 — required_filters_json도 캐시 키의 일부다."""
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    calls = {"n": 0}
+    real_run = streamlit_app.RecommendationAgent.run
+
+    def counting_run(self, user_text, top_n=3, required_filters=None):
+        calls["n"] += 1
+        return real_run(self, user_text, top_n=top_n, required_filters=required_filters)
+
+    monkeypatch.setattr(streamlit_app.RecommendationAgent, "run", counting_run)
+    v = streamlit_app.PIPELINE_VERSION
+    streamlit_app.run_agent_cached("안전한 곳", False, v, "[]")
+    streamlit_app.run_agent_cached(
+        "안전한 곳", False, v, json.dumps([{"type": "gu", "gu": ["강남구"]}]))
     assert calls["n"] == 2
 
 

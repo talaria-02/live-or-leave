@@ -97,17 +97,11 @@ def test_uniform_preference_avoids_lopsided_recommendation(real_scores):
             f"한쪽으로 치우친 동네가 뽑혔다: {top.dong}")
 
 
-# ---------- 필터: 대형병원 필수 ----------
+# ---------- 데이터 불변식: 병원 보유 동은 실제 데이터의 진부분집합 ----------
 
 def test_hospital_filter_is_a_proper_nonempty_subset_of_real_data(real_scores):
     filtered = [s for s in real_scores if s.raw.hosp_cnt >= 1]
     assert 0 < len(filtered) < len(real_scores)
-
-
-def test_hospital_filter_never_returns_zero_hospital_dong(real_scores):
-    recs = scoring.rank(real_scores, UNIFORM, top_n=len(real_scores),
-                         require_large_hospital=True)
-    assert all(r.scores.raw.hosp_cnt >= 1 for r in recs)
 
 
 # ---------- 데이터 불변식: 범죄율은 구 단위로 상속된다 ----------

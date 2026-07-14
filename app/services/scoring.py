@@ -40,23 +40,6 @@ def score_extra_categories(
     return result
 
 
-def partition_by_required_categories(
-    scores: list[DongScores], required_counts: dict[str, dict[str, int]]
-) -> tuple[list[DongScores], list[dict]]:
-    """required_counts에 담긴 업종을 전부(AND) 반경 내에 가진 동만 통과시킨다.
-    떨어진 동은 어떤 업종이 없어서 떨어졌는지(실격 사유)와 함께 반환한다 —
-    필터가 '왜' 걸렀는지 사용자/개발자가 검증할 수 있게 하기 위함."""
-    qualified = []
-    disqualified = []
-    for s in scores:
-        missing = [cat for cat, counts in required_counts.items() if counts.get(s.code, 0) < 1]
-        if missing:
-            disqualified.append({"scores": s, "missing": missing})
-        else:
-            qualified.append(s)
-    return qualified, disqualified
-
-
 def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
     """(lon, lat) 두 점 사이 대원거리(km)."""
     from math import asin, cos, radians, sin, sqrt
@@ -73,8 +56,7 @@ def partition_by_proximity(
     radius_km: float,
 ) -> tuple[list[DongScores], list[dict]]:
     """'서울대 근처' 류 거리 필수조건 — 모든 랜드마크에서 radius_km 이내
-    (동 중심점 기준)인 동만 통과. partition_by_required_categories와 동일한
-    (qualified, disqualified+사유) 반환 형태."""
+    (동 중심점 기준)인 동만 통과. (qualified, disqualified+사유) 반환 형태."""
     qualified = []
     disqualified = []
     for s in scores:
@@ -147,15 +129,10 @@ def rank(
     scores: list[DongScores],
     weights: dict[str, float],
     top_n: int = 5,
-    require_large_hospital: bool = False,
     extra_scores: dict[str, dict[str, float]] | None = None,
 ) -> list[Recommendation]:
     extra_scores = extra_scores or {}
     pool = scores
-    if require_large_hospital:
-        filtered = [s for s in scores if s.raw.hosp_cnt >= 1]
-        pool = filtered or scores
-
     scored = []
     for s in pool:
         contrib = {c: round(weights[c] * getattr(s, c), 4) for c in CATEGORIES}

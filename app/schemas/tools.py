@@ -35,22 +35,26 @@ IMPORTANCE_SCORE: dict[Importance, float] = {
 class FilterClause(BaseModel):
     """필수 요구사항 1건 — type에 따라 아래 필드 중 해당하는 것만 채워진다.
 
-    거리(near)·업종(category)·행정구역(gu), 3종류를 하나의
-    목록(ParsedIntent.required_filters)으로 표현한다. 새 필터 종류가 생겨도
-    여기 타입 하나 추가 + tools.py에 실행 함수 하나 추가로 끝나게 하기 위함
-    (에이전트 흐름·LLM 호출 횟수는 그대로)."""
+    거리(near)·행정구역(gu) 2종류를 하나의 목록(RecommendTool.required_filters)
+    으로 표현한다. LLM이 자연어에서 추론하지 않는다 — 사용자가 UI에서 직접
+    고른 구조화 입력(구 멀티셀렉트, 기준 장소 텍스트)을 그대로 옮겨 담는다.
+    그래서 ParsedIntent에는 이 필드가 없다: LLM 출력과 required_filters는
+    이제 완전히 분리된 경로다(loop.py가 둘을 합쳐 RecommendTool을 만든다).
 
-    type: Literal["category", "near", "gu"]
+    업종 존재(category)·대형병원(require_large_hospital) 하드필터는 제거됐다
+    (app/agent/tools.py 모듈 docstring에 사유 기록)."""
 
-    # type="category" — 업종 존재 필터
-    category: str | None = Field(
-        default=None,
-        description="'헬스장', '약국'처럼 존재해야 하는 업종·시설명. 상권업종소분류명이나 "
-        "Kakao 표준 카테고리명이 우선이지만, 없으면 열린 키워드도 허용.",
-    )
+    type: Literal["near", "gu"]
 
-    # type="near" — 랜드마크 거리 필터
+    # type="near" — 거리 필터 (기준 장소: 랜드마크·회사·주소 등 임의 장소)
     place: str | None = Field(default=None, description="'서울대', '강남역' 등 기준 장소명")
+    lon: float | None = Field(
+        default=None,
+        description="기준 장소 좌표(경도)를 이미 알 때 직접 지정. UI에서 Kakao 검색 후보 "
+        "여러 개 중 사용자가 하나를 골랐을 때 그 좌표를 그대로 쓴다 — 있으면 place로 다시 "
+        "검색하지 않는다(재검색 시 top-1이 사용자가 고른 것과 다를 수 있어서).",
+    )
+    lat: float | None = Field(default=None, description="기준 장소 좌표(위도). lon과 함께 채운다")
     radius_km: float | None = Field(
         default=None, description="반경(km). 생략하면 기본값(3km) 사용"
     )
@@ -80,21 +84,17 @@ class CategoryPreference(BaseModel):
 
 
 class ParsedIntent(BaseModel):
-    """입구 LLM 전체 출력 — 선호 + 명시적 필수조건 + 되묻기 여부."""
+    """입구 LLM 전체 출력 — 선호 + 되묻기 여부.
+
+    required_filters(구·근처)는 여기 없다 — 사용자가 UI에서 직접 입력하는
+    구조화 값이라 LLM이 볼 필요도, 지어낼 여지도 없다. loop.py가 이 출력과
+    UI가 준 required_filters를 나중에 합쳐 RecommendTool을 만든다."""
 
     preference: CategoryPreference
-    require_large_hospital: bool = Field(
-        default=False, description="'대형병원 있어야' 류의 필수조건 감지 시 True"
-    )
     extra_categories: list[str] = Field(
         default_factory=list,
         description="'버거집', '헬스장' 같이 4개 카테고리 밖에서 '선택'으로 언급된 업종 — "
         "점수에 반영(가중치 참여). 실제 존재하는 상권업종소분류명 문자열로만 채운다 (자유 생성 금지)",
-    )
-    required_filters: list[FilterClause] = Field(
-        default_factory=list,
-        description="'필수'로 언급된 조건 전부 — 점수화가 아니라 하드 필터(전부 AND, "
-        "단 같은 group의 near끼리는 OR). 업종 존재/거리/행정구역 3종.",
     )
     needs_clarification: bool = Field(
         default=False, description="성향이 모호해 되물어야 하면 True"
@@ -107,10 +107,12 @@ class ParsedIntent(BaseModel):
 # ---- 도구(tool) 입출력 스키마 : ReAct 루프에서 LLM이 호출 ----
 
 class RecommendTool(BaseModel):
-    """도구: 선호를 받아 상위 N개 자치구 추천."""
+    """도구: 선호를 받아 상위 N개 자치구 추천.
+
+    required_filters는 ParsedIntent가 아니라 UI의 구조화 입력(구 멀티셀렉트,
+    기준 장소)에서 직접 채워진다 — LLM 출력이 아니다."""
 
     preference: CategoryPreference
-    require_large_hospital: bool = False
     extra_categories: list[str] = Field(default_factory=list)
     required_filters: list[FilterClause] = Field(default_factory=list)
     top_n: int = Field(default=3, ge=1, le=500)

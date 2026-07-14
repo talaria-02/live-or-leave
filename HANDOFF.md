@@ -146,13 +146,54 @@
 - **수치 지표 상위권 컷오프 필터(metric) 제거**: `FilterClause(type="metric")`가
   하던 "이 동네 지표가 서울 상위 N% 안에 들어야 함"(백분위 컷오프, moderate=
   상위50%/strict=30%/very_strict=15%) 하드 필터를 프롬프트·백엔드 양쪽에서
-  완전히 뺐다 — 대부분의 지역을 실격(보라색)으로 만드는 주범이었다. 스키마
-  (`MetricLevel` enum, `FilterClause.field`/`level`), 실행 로직
-  (`scoring.partition_by_metric`, `tools.py`의 `METRIC_DIRECTIONS`/
-  `METRIC_LEVEL_CUTOFF`와 metric 디스패치 분기), 파싱 프롬프트의 4번째
-  타입 설명·`_METRIC_FIELDS` 치환을 모두 제거했다. `required_filters`는
-  이제 category/near/gu 3종만 남는다 — 필요하면 선택 요구사항(가중치
-  기반 점수화)으로 대체할 것.
+  완전히 뺐다 — 대부분의 지역을 실격(보라색)으로 만드는 주범이었다. (이후
+  category·require_large_hospital도 제거돼 아래 항목에서 다시 정리됨.)
+- **필수조건 하드필터 아키텍처 전면 재설계 (category/대형병원 제거 + 구조화
+  UI 입력 + LLM 오분류 버그 근본 해결)**: 세 가지 문제를 한 번에 다뤘다.
+  1. **category(업종 존재)·require_large_hospital 완전 삭제.** 업종 하드필터는
+     닫힌 집합 밖 키워드의 Kakao 검색 커버리지가 들쭉날쭉해 "실제로는 있는데
+     없다고 실격"되는 오탐이 잦았고, 그 자체를 검증하기도 어려웠다.
+     require_large_hospital은 near(특정 대형병원 근처) 필터로 동일하게
+     해결 가능해 별도 특수 케이스를 유지할 이유가 없었다. `MetricLevel`처럼
+     스키마(`FilterClause.category`, `ParsedIntent.require_large_hospital`
+     등)·백엔드(`scoring.partition_by_required_categories`, tools.py의
+     category/hospital 분기)·프롬프트(bullet 1)·관련 테스트를 전부 제거했다.
+     `required_filters`는 이제 near·gu 2종만 남는다.
+  2. **구·기준 장소를 LLM 자연어 파싱에서 UI 구조화 입력으로 이동.** 예전엔
+     "필수 요구사항:" 자유 텍스트를 LLM이 파싱해 near/gu FilterClause를
+     만들었는데, "선택 요구사항에만 적힌 단어가 하드필터로 오인식되는" 버그가
+     반복적으로 나왔다(예: "헬스장 있어야 함" + "쉬는 날엔 공원에서 걷고
+     싶어요"를 넣으면 "공원"까지 필수 취급돼 대부분 동이 실격). 근본 원인은
+     "자연어에서 하드필터를 추출"하는 작업 자체가 확률적이라는 것 — 아무리
+     프롬프트·후처리 가드를 강화해도 회귀 가능성이 남는다. 그래서 구조를
+     바꿨다: **구는 멀티셀렉트(+제외 체크박스), 기준 장소는 텍스트 검색
+     + Kakao 후보 선택 UI**로 사용자가 직접 지정하고, `streamlit_app.py`가
+     이 값으로 `FilterClause`를 코드에서 직접 만들어(`RecommendationAgent.
+     run/stream`의 새 `required_filters` 매개변수) LLM 호출과 완전히
+     분리된 경로로 넘긴다. `ParsedIntent`에는 이제 `required_filters`가
+     아예 없다 — LLM은 가중치·extra_categories만 본다. 이렇게 하면 "선택
+     텍스트가 필수로 오인식"되는 버그가 구조적으로 발생할 수 없다(LLM이
+     하드필터를 판단할 기회 자체가 없으므로). `loop.py`는 `needs_clarification`이
+     와도 `required_filters`가 이미 있으면 되묻지 않는다(구조화 입력 자체가
+     이미 충분히 구체적인 조건이라서).
+  3. **기준 장소 top-1 오선택 완화 — 후보 선택 UI.** "삼성" 같은 흔한 이름은
+     Kakao 검색 1위가 사용자 의도와 다를 수 있다(top-1을 그냥 믿는 게
+     문제였음). `KakaoFacilityRepository.search_place_candidates()`(신규,
+     최대 5개, 이름+주소+좌표)를 추가하고 `locate_place()`는 그 1등만 쓰는
+     하위호환 래퍼로 남겼다. UI는 후보를 라디오로 보여주고, 고른 좌표를
+     `FilterClause.lon`/`lat`(신규 필드)에 직접 담아 tools.py에 넘긴다 —
+     좌표가 있으면 `place`로 재검색하지 않는다(재검색하면 Kakao 자체
+     top-1이 나와 사용자가 고른 것과 달라질 수 있어서). 고른 후보는 버튼을
+     누르기 전에도 지도에 주황 별(미리보기)로 바로 반영되고, 추천을
+     실행하면 확정 노란 별로 바뀐다.
+  - 부수 수정: 추천 버튼이 결과 표시 후 사라지는 CSS 버그(flexbox 자동
+    최소크기 규칙 — `overflow:auto`인 위젯 wrapper가 패널 높이 초과 시
+    스크롤 대신 0으로 찌그러짐)를 `flex-shrink:0`으로 수정. 브라우저로
+    실제 재현·수정 확인(근처 필터까지 포함한 전체 흐름 E2E 테스트 완료).
+  - 테스트 178개 통과(제거된 기능 테스트 정리 + 후보 선택/좌표 직접전달
+    신규 테스트 추가). `require.md`(페르소나 시나리오 문서)는 이번 재설계
+    이전 필터 체계(category·구/근처 자유텍스트) 기준으로 작성돼 있어
+    최신화 필요 — 다음 세션 작업 후보.
 
 ## 파일 지도
 

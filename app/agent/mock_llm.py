@@ -5,31 +5,19 @@ Mock LLM — 실제 Solar API 호출을 대체하는 결정론적 스텁.
       끝까지 검증한다. 실제 구현에서는 이 클래스만 Solar API 호출로 교체하면 된다.
 
 입구/출구 두 역할을 규칙 기반으로 흉내낸다:
-  - parse_intent: 자연어에서 키워드를 보고 중요도 라벨을 채운다.
+  - parse_intent: 자연어에서 키워드를 보고 중요도 라벨을 채운다. 구·근처
+    하드필터(FilterClause)는 여기 없다 — UI 구조화 입력에서 직접 오므로
+    LLM(과 이 mock)이 텍스트에서 추론할 대상이 아니다.
   - explain: 추천지의 실제 지표 수치를 인용해 근거 문장을 만든다.
 """
 from __future__ import annotations
 
-import re
-
-from app.agent.intent_sanitizer import split_required_optional
-from app.agent.tools import GU_ALIASES, SEOUL_GU
 from app.agent.unsupported_requirements import (
     detect_unsupported_requirements,
     format_unsupported_requirements,
 )
 from app.schemas.domain import CATEGORY_CAVEATS
-from app.schemas.tools import (
-    CategoryPreference,
-    FilterClause,
-    Importance,
-    ParsedIntent,
-)
-
-# 알려진 이름만 찾는다 — 일반 \S+구 정규식은 "요구사항" 같은 마커 텍스트의
-# "요구"까지 구 이름으로 오인식한다. 긴 이름(별칭) 먼저 검사해 "강남구"가
-# "강남3구" 안에서 먼저 매칭되는 걸 방지.
-_KNOWN_GU_NAMES = sorted(set(SEOUL_GU) | set(GU_ALIASES), key=len, reverse=True)
+from app.schemas.tools import CategoryPreference, Importance, ParsedIntent
 
 # 키워드 → 카테고리 매핑 (실제 LLM의 의미 이해를 규칙으로 근사)
 _KW = {
@@ -73,38 +61,9 @@ def _match_facility_categories(text: str) -> list[str]:
     return matched
 
 
-_EXCLUDE_MARKERS = ("빼", "제외", "말고")
-
-
-def _match_gu_filters(text: str) -> list[FilterClause]:
-    """"강남구 안에서만"/"강남구는 빼고" 같은 구 포함·제외 요구를 규칙 기반으로
-    근사한다. 알려진 25개 구 이름·별칭만 찾고, 그 뒤 몇 글자 안에 제외 마커가
-    있는지로 포함/제외를 가른다 — 자유 문장 의미 파악이 필요한 요구는 정확도가
-    떨어져 mock에서는 지원하지 않는다."""
-    include, exclude = [], []
-    for name in _KNOWN_GU_NAMES:
-        idx = text.find(name)
-        if idx == -1:
-            continue
-        tail = text[idx + len(name): idx + len(name) + 6]
-        bucket = exclude if any(mk in tail for mk in _EXCLUDE_MARKERS) else include
-        if name not in bucket:
-            bucket.append(name)
-    clauses = []
-    if include:
-        clauses.append(FilterClause(type="gu", gu=include, exclude=False))
-    if exclude:
-        clauses.append(FilterClause(type="gu", gu=exclude, exclude=True))
-    return clauses
-
-
 class MockLLM:
     def parse_intent(self, text: str) -> ParsedIntent:
-        required_part, optional_part = split_required_optional(text)
-
-        # 4개 카테고리 라벨링과 '선택' 업종은 선택 요구사항 구역에서만 (마커가 없으면
-        # optional_part == 전체 텍스트라 기존 자유 문장 동작과 100% 동일하다).
-        t = optional_part.lower()
+        t = text.lower()
         labels: dict[str, Importance] = {}
         for cat, kws in _KW.items():
             hit = sum(1 for k in kws if k in t)
@@ -116,34 +75,16 @@ class MockLLM:
                 labels[cat] = Importance.NONE
 
         pref = CategoryPreference(**labels)
-        require_hosp = ("대형병원" in text) or ("종합병원" in text)
+        extra = _match_facility_categories(text)
 
-        extra = _match_facility_categories(optional_part)
-
-        # 필수 구역 → FilterClause 목록. near가 우선이라 같은 이름이 category에
-        # 남으면 제거(실 LLM 파싱과 동일 규칙, solar_llm._parse_required_filters 참고).
-        near_places = list(dict.fromkeys(
-            m.group(1) for m in re.finditer(r"(\S+?)\s*(?:근처|가까이|인근)", required_part)
-        ))
-        required_filters = [FilterClause(type="near", place=p) for p in near_places]
-        required_filters += [
-            FilterClause(type="category", category=c)
-            for c in _match_facility_categories(required_part) if c not in near_places
-        ]
-        required_filters += _match_gu_filters(required_part)
-
-        # 4개 카테고리도 모호하고 선택/필수 조건도 없으면 성향 모호 → 되묻기
-        if (all(v == Importance.NONE for v in labels.values())
-                and not extra and not required_filters):
+        # 4개 카테고리도 모호하고 업종 언급도 없으면 성향 모호 → 되묻기
+        if all(v == Importance.NONE for v in labels.values()) and not extra:
             return ParsedIntent(
                 preference=pref,
                 needs_clarification=True,
                 clarify_question="어떤 점을 가장 중요하게 보세요? (안전 / 편의 / 교통 / 환경)",
             )
-        return ParsedIntent(
-            preference=pref, require_large_hospital=require_hosp,
-            extra_categories=extra, required_filters=required_filters,
-        )
+        return ParsedIntent(preference=pref, extra_categories=extra)
 
     def explain(self, user_text: str, result: dict) -> str:
         """출구 역할: 실제 수치 + 선택 근거(가중치·카테고리별 기여도)를 내부적으로만

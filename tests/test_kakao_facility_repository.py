@@ -61,8 +61,9 @@ def _page(docs, total, is_end=True):
     return {"documents": docs, "meta": {"total_count": total, "is_end": is_end}}
 
 
-def _doc(place_id, lon, lat):
-    return {"id": place_id, "place_name": place_id, "x": str(lon), "y": str(lat)}
+def _doc(place_id, lon, lat, address=""):
+    return {"id": place_id, "place_name": place_id, "x": str(lon), "y": str(lat),
+            "road_address_name": address}
 
 
 # ---------- 좌표 → 동 매핑 (PIP) ----------
@@ -291,6 +292,58 @@ def test_locate_place_returns_first_result_coordinate(tmp_path, square_geojson, 
     assert repo.locate_place("서울대") == (126.95, 37.46)
 
 
+# ---------- search_place_candidates: 후보 여러 개 (오분류 방지 UX용) ----------
+
+def test_search_place_candidates_returns_name_address_coords(tmp_path, square_geojson, monkeypatch):
+    monkeypatch.setattr(
+        KakaoFacilityRepository, "_fetch_page",
+        lambda self, kw, rect, page, category_code=None: _page([
+            _doc("삼성전자 강남", 127.02, 37.50, address="서울 강남구 테헤란로 1"),
+            _doc("삼성디지털시티", 127.10, 37.25, address="경기 수원시 영통구 2"),
+        ], total=2))
+    repo = _repo(tmp_path, square_geojson)
+    candidates = repo.search_place_candidates("삼성")
+    assert candidates == [
+        {"name": "삼성전자 강남", "address": "서울 강남구 테헤란로 1", "lon": 127.02, "lat": 37.50},
+        {"name": "삼성디지털시티", "address": "경기 수원시 영통구 2", "lon": 127.10, "lat": 37.25},
+    ]
+
+
+def test_search_place_candidates_respects_limit(tmp_path, square_geojson, monkeypatch):
+    monkeypatch.setattr(
+        KakaoFacilityRepository, "_fetch_page",
+        lambda self, kw, rect, page, category_code=None: _page(
+            [_doc(f"장소{i}", 127.0 + i * 0.01, 37.5) for i in range(10)], total=10))
+    repo = _repo(tmp_path, square_geojson)
+    assert len(repo.search_place_candidates("장소", limit=3)) == 3
+
+
+def test_locate_place_uses_first_candidate(tmp_path, square_geojson, monkeypatch):
+    """locate_place는 search_place_candidates의 1등 좌표만 쓰는 하위호환 래퍼."""
+    monkeypatch.setattr(
+        KakaoFacilityRepository, "_fetch_page",
+        lambda self, kw, rect, page, category_code=None: _page([
+            _doc("univ", 126.95, 37.46), _doc("noise", 127.0, 37.5)], total=2))
+    repo = _repo(tmp_path, square_geojson)
+    assert repo.locate_place("서울대") == (126.95, 37.46)
+    assert repo.search_place_candidates("서울대")[0]["name"] == "univ"
+
+
+def test_search_place_candidates_caches_across_instances(tmp_path, square_geojson, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_fetch(self, kw, rect, page, category_code=None):
+        calls["n"] += 1
+        return _page([_doc("univ", 126.95, 37.46)], total=1)
+
+    monkeypatch.setattr(KakaoFacilityRepository, "_fetch_page", fake_fetch)
+    _repo(tmp_path, square_geojson).search_place_candidates("서울대")
+    n = calls["n"]
+    # 새 인스턴스라도 디스크 캐시 재사용 — 재조회 0 call
+    assert _repo(tmp_path, square_geojson).search_place_candidates("서울대")[0]["name"] == "univ"
+    assert calls["n"] == n
+
+
 def test_locate_place_caches_including_not_found(tmp_path, square_geojson, monkeypatch):
     calls = {"n": 0}
 
@@ -336,34 +389,6 @@ def test_partition_by_proximity_disqualifies_unknown_centroid():
     qualified, disqualified = partition_by_proximity(
         [_S()], {"시청": (126.978, 37.566)}, {}, radius_km=3.0)
     assert not qualified and len(disqualified) == 1
-
-
-# ---------- tools 배선: 해석 불가 필수 업종 ----------
-
-def test_recommend_skips_and_reports_unresolved_required(monkeypatch, sample_raws):
-    """CSV에 없고 API 키도 없는 필수 업종은 조용히 전 지역 실격시키는 대신
-    필터에서 빼고 unresolved_requirements로 보고해야 한다."""
-    from app.agent import tools as tools_mod
-    from app.schemas.tools import CategoryPreference, FilterClause, Importance, RecommendTool
-    from tests.conftest import FakeRepo
-
-    monkeypatch.setattr(
-        tools_mod, "get_hybrid_facility_repository",
-        lambda: HybridFacilityRepository(csv_repo=_FakeCsvRepo(), kakao_repo=_FakeKakaoRepo(key=False)))
-
-    executor = tools_mod.ToolExecutor(FakeRepo(sample_raws))
-    result = executor.recommend(RecommendTool(
-        preference=CategoryPreference(
-            safety=Importance.HIGH, convenience=Importance.NONE,
-            mobility=Importance.NONE, environment=Importance.NONE),
-        required_filters=[  # 헬스장=CSV, 클라이밍장=해석불가
-            FilterClause(type="category", category="헬스장"),
-            FilterClause(type="category", category="클라이밍장"),
-        ],
-    ))
-
-    assert result["unresolved_requirements"] == ["클라이밍장"]
-    assert result["recommendations"]  # 전 지역 실격되지 않음 (헬스장 count=7 통과)
 
 
 # ---------- tools 배선: '근처' 거리 필터 ----------

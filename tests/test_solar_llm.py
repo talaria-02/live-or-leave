@@ -150,13 +150,11 @@ def test_parse_intent_parses_valid_json_response(monkeypatch):
     _stub_call(monkeypatch, json.dumps({
         "safety": "very_high", "convenience": "none",
         "mobility": "medium", "environment": "none",
-        "require_large_hospital": True,
         "needs_clarification": False, "clarify_question": None,
     }))
     intent = SolarLLM().parse_intent("안전하고 대형병원 있는 곳")
     assert intent.preference.safety == Importance.VERY_HIGH
     assert intent.preference.mobility == Importance.MEDIUM
-    assert intent.require_large_hospital is True
     assert intent.needs_clarification is False
 
 
@@ -183,102 +181,6 @@ def test_parse_intent_extracts_extra_categories_within_closed_set(monkeypatch):
     }))
     intent = SolarLLM().parse_intent("버거집 있는 곳")
     assert intent.extra_categories == ["버거"]  # 닫힌 집합 밖은 걸러짐
-
-
-def _clause_type(intent, t):
-    return [c for c in intent.required_filters if c.type == t]
-
-
-def test_parse_intent_accepts_open_keywords_for_category_clauses(monkeypatch):
-    """필수 업종은 extra와 달리 닫힌 집합 필터를 통과하지 않는다 — CSV 밖 시설
-    ('클라이밍장' 등)은 Kakao 좌표검색으로 해석되므로 열린 키워드 그대로 보존."""
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [
-            {"type": "category", "category": " 클라이밍장 "},
-            {"type": "category", "category": "도서관"},
-            {"type": "category", "category": ""},
-            {"type": "category", "category": "클라이밍장"},
-        ],
-    }))
-    intent = SolarLLM().parse_intent("클라이밍장이랑 도서관 꼭 있어야 해요")
-    cats = [c.category for c in _clause_type(intent, "category")]
-    assert cats == ["클라이밍장", "도서관"]  # 공백 정리·중복·빈값 제거
-
-
-def test_parse_intent_separates_near_from_category_clause(monkeypatch):
-    """'서울대 근처'는 거리 필터(near)로만 — LLM이 지시를 어기고 같은 이름을
-    category에도 중복시키면 코드가 걸러내야 한다 (이름 매칭 노이즈 필터 방지)."""
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [
-            {"type": "category", "category": "서울대"},
-            {"type": "category", "category": "클라이밍"},
-            {"type": "near", "place": "서울대"},
-        ],
-    }))
-    intent = SolarLLM().parse_intent("서울대 근처에 클라이밍장 있는 곳")
-    assert [c.place for c in _clause_type(intent, "near")] == ["서울대"]
-    assert [c.category for c in _clause_type(intent, "category")] == ["클라이밍"]  # 중복 제거됨
-
-
-def test_parse_intent_caps_total_filter_clauses(monkeypatch):
-    """near는 category처럼 텍스트-존재 검증(explicitly_requested_categories)을
-    타지 않으므로, 캡 자체만 순수하게 검증하기에 적합하다."""
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [
-            {"type": "near", "place": f"장소{i}"} for i in range(20)
-        ],
-    }))
-    intent = SolarLLM().parse_intent("이것저것 다 필요해요")
-    assert len(intent.required_filters) == 8
-
-
-def test_parse_intent_near_radius_and_group(monkeypatch):
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [
-            {"type": "near", "place": "강남역", "group": "역세권"},
-            {"type": "near", "place": "홍대입구역", "group": "역세권"},
-        ],
-    }))
-    intent = SolarLLM().parse_intent("강남역이나 홍대입구역 중 아무데나 가까우면")
-    near = _clause_type(intent, "near")
-    assert {c.place for c in near} == {"강남역", "홍대입구역"}
-    assert {c.group for c in near} == {"역세권"}
-
-
-def test_parse_intent_gu_include_and_exclude(monkeypatch):
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [{"type": "gu", "gu": ["강남구", "서초구"], "exclude": False}],
-    }))
-    intent = SolarLLM().parse_intent("강남구나 서초구 안에서만")
-    gu = _clause_type(intent, "gu")[0]
-    assert gu.gu == ["강남구", "서초구"] and gu.exclude is False
-
-
-def test_parse_intent_drops_category_clause_not_explicitly_mentioned_in_text(monkeypatch):
-    """intent_sanitizer의 배경정보 추론 방지 가드가 required_filters의 category
-    절에도 적용돼야 한다(extra_categories와 동일 규칙) — 텍스트에 실제로
-    없는 업종명은 LLM이 필수 필터로 지어내도 걸러진다."""
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [
-            {"type": "category", "category": "헬스장"},   # 텍스트에 실제 언급됨 → 유지
-            {"type": "category", "category": "세무사"},   # 언급 안 됨(배경 추론) → 제거
-        ],
-    }))
-    intent = SolarLLM().parse_intent("저는 회계사이고 헬스장 다니는 동네였으면 해요")
-    cats = [c.category for c in intent.required_filters if c.type == "category"]
-    assert cats == ["헬스장"]
 
 
 def test_parse_intent_drops_inferred_extra_categories_not_explicitly_requested(monkeypatch):
@@ -309,22 +211,6 @@ def test_parse_intent_keeps_explicitly_requested_extra_category(monkeypatch):
     intent = SolarLLM().parse_intent("헬스장에 자주 가고 공원도 가까운 동네")
 
     assert intent.extra_categories == ["헬스장"]
-
-
-def test_parse_intent_large_hospital_requires_explicit_large_hospital_word(monkeypatch):
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "very_high",
-        "mobility": "high", "environment": "none",
-        "require_large_hospital": True,
-        "needs_clarification": False,
-    }))
-
-    generic = SolarLLM().parse_intent("부모님 병원 접근성이 좋고 대중교통이 편한 곳")
-    explicit = SolarLLM().parse_intent("부모님 때문에 대형병원이 꼭 가까운 곳")
-
-    assert generic.require_large_hospital is False
-    assert explicit.require_large_hospital is True
 
 
 def test_parse_intent_forces_clarification_for_vague_fit_request(monkeypatch):

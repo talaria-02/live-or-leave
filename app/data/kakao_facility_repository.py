@@ -40,6 +40,13 @@ KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
 # 서울 전체 bbox (lon_min, lat_min, lon_max, lat_max) — 타일링 시작점
 SEOUL_RECT = (126.734, 37.413, 127.270, 37.715)
+# 기준 장소(near 필터) 검색 전용 bbox — 서울보다 넓게 잡아 성남·과천·광명·
+# 하남·구리·고양 등 수도권 위성도시도 기준 장소로 고를 수 있게 한다.
+# (서울 동 데이터 자체는 여전히 서울만 있으니, 서울 밖 장소는 "거리 기준점"
+# 으로만 쓰이고 그 장소가 속한 동이 추천 후보로 나오진 않는다.) 그 외
+# 시설-카운트용 타일링(SEOUL_RECT)은 그대로 서울로 유지 — 넓히면 API 호출만
+# 늘고 어차피 서울 동 경계 밖 좌표는 point-in-polygon에서 걸러진다.
+PLACE_SEARCH_RECT = (126.60, 37.30, 127.35, 37.75)
 
 # Kakao 표준 카테고리 그룹코드(14종 대분류) — 이 이름으로 요청되면 키워드 검색
 # 대신 카테고리 검색을 쓴다. 키워드 추측(동의어 매핑) 없이 정확하고, 결과가
@@ -104,7 +111,7 @@ class KakaoFacilityRepository:
         self._geojson_path = geojson_path
         self._dong_index: _DongIndex | None = None  # 지연 로딩 (shapely import 비용)
         self._mem: dict[str, dict[tuple[str, str], int]] = {}
-        self._place_mem: dict[str, tuple[float, float] | None] = {}
+        self._candidates_mem: dict[str, list[dict]] = {}
 
     def available(self) -> bool:
         return bool(self.api_key)
@@ -156,39 +163,61 @@ class KakaoFacilityRepository:
 
     # ---- 랜드마크 좌표 검색 ("서울대 근처" 류 거리 필터용) ----
 
-    def locate_place(self, name: str) -> tuple[float, float] | None:
-        """장소명으로 대표 좌표 1개를 찾는다 (Kakao 정확도순 1위 결과).
+    def search_place_candidates(self, name: str, limit: int = 5) -> list[dict]:
+        """장소명으로 후보 여러 개를 찾는다 (Kakao 정확도순, 최대 limit개).
 
-        counts_for(동별 업소 수 집계)와 목적이 다르다 — '근처' 요구는 이름이
-        비슷한 업소 수백 곳이 아니라 그 장소 자체의 좌표 하나가 기준이어야 한다.
-        서울 rect로 제한해 동명 타지역 장소(예: 부산 서면역)가 잡히는 걸 막는다.
-        API 1 call, 디스크 캐시. 검색 결과 없으면 None ('없음'도 캐시됨)."""
+        "삼성" 같은 흔한 이름은 top-1이 사용자가 의도한 곳이 아닐 수 있다
+        (회사명·주소 등 임의 장소를 받다 보니 동명이인 리스크가 큼) — top-1을
+        말없이 믿는 대신 후보를 보여주고 사용자가 직접 고르게 하기 위한 API.
+        각 후보: {"name": 상호명, "address": 도로명(없으면 지번) 주소,
+        "lon": 경도, "lat": 위도}. 수도권 rect(PLACE_SEARCH_RECT)로 제한해
+        동명 타지역 장소(예: 부산 서면역)가 섞이는 걸 막으면서도, 성남시 같은
+        서울 인접 위성도시는 기준 장소로 검색할 수 있게 한다. API 1 call, 디스크 캐시."""
         name = name.strip()
-        if name in self._place_mem:
-            return self._place_mem[name]
+        if name in self._candidates_mem:
+            return self._candidates_mem[name][:limit]
 
-        path = self.cache_dir / ("place_" + name.encode("utf-8").hex() + ".json")
+        path = self._place_cache_path(name)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if time.time() - data.get("fetched_at", 0) <= self.ttl_seconds:
-                coord = tuple(data["coord"]) if data["coord"] else None
-                self._place_mem[name] = coord
-                return coord
+            if (time.time() - data.get("fetched_at", 0) <= self.ttl_seconds
+                    and "candidates" in data):  # 구버전 캐시(candidates 없음)는 재조회
+                self._candidates_mem[name] = data["candidates"]
+                return data["candidates"][:limit]
         except (OSError, json.JSONDecodeError, KeyError):
             pass
 
         if not self.available():
             raise RuntimeError("KAKAO_REST_API_KEY 환경변수가 설정되지 않았습니다.")
 
-        docs = self._fetch_page(name, SEOUL_RECT, page=1)["documents"]
-        coord = (float(docs[0]["x"]), float(docs[0]["y"])) if docs else None
+        docs = self._fetch_page(name, PLACE_SEARCH_RECT, page=1)["documents"]
+        candidates = [
+            {
+                "name": d.get("place_name") or name,
+                "address": d.get("road_address_name") or d.get("address_name") or "",
+                "lon": float(d["x"]), "lat": float(d["y"]),
+            }
+            for d in docs
+        ]
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "name": name, "fetched_at": time.time(),
-            "coord": list(coord) if coord else None,
+            "candidates": candidates,
         }, ensure_ascii=False), encoding="utf-8")
-        self._place_mem[name] = coord
-        return coord
+        self._candidates_mem[name] = candidates
+        return candidates[:limit]
+
+    def locate_place(self, name: str) -> tuple[float, float] | None:
+        """대표 좌표 1개(Kakao 1위 결과)만 필요한 호출부용 하위호환 래퍼.
+
+        새 코드는 후보를 보여주고 사용자가 고르게 하는
+        search_place_candidates()를 직접 쓰는 걸 권장한다 — top-1을 그냥
+        믿으면 "삼성" 같은 모호한 이름에서 엉뚱한 곳이 뽑힐 수 있다."""
+        candidates = self.search_place_candidates(name, limit=1)
+        return (candidates[0]["lon"], candidates[0]["lat"]) if candidates else None
+
+    def _place_cache_path(self, name: str) -> Path:
+        return self.cache_dir / ("place_" + name.encode("utf-8").hex() + ".json")
 
     def dong_centroids(self) -> dict[str, tuple[float, float]]:
         return self._get_dong_index().centroids()
@@ -343,6 +372,9 @@ class HybridFacilityRepository:
 
     def locate_place(self, name: str) -> tuple[float, float] | None:
         return self._kakao.locate_place(name)
+
+    def search_place_candidates(self, name: str, limit: int = 5) -> list[dict]:
+        return self._kakao.search_place_candidates(name, limit=limit)
 
     def dong_centroids(self) -> dict[str, tuple[float, float]]:
         return self._kakao.dong_centroids()
