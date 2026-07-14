@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+from app.agent.intent_sanitizer import split_required_optional
 from app.agent.tools import GU_ALIASES, SEOUL_GU
 from app.agent.unsupported_requirements import (
     detect_unsupported_requirements,
@@ -61,29 +62,6 @@ _FACILITY_SYNONYMS: dict[str, list[str]] = {
     "수영": ["수영장"],
 }
 
-# UI가 "필수 요구사항:"/"선택 요구사항:" 구역으로 나눠 보낼 때 쓰는 마커.
-# 마커가 없는 자유 문장은 전부 '선택 요구사항'으로 취급해 기존 동작을 그대로 유지한다.
-_REQUIRED_MARKER = "필수 요구사항"
-_OPTIONAL_MARKER = "선택 요구사항"
-
-
-def _split_required_optional(text: str) -> tuple[str, str]:
-    markers = [
-        (idx, kind)
-        for marker, kind in ((_REQUIRED_MARKER, "required"), (_OPTIONAL_MARKER, "optional"))
-        for idx in [text.find(marker)]
-        if idx != -1
-    ]
-    if not markers:
-        return "", text
-    markers.sort()
-    sections = {"required": "", "optional": ""}
-    for i, (idx, kind) in enumerate(markers):
-        end = markers[i + 1][0] if i + 1 < len(markers) else len(text)
-        sections[kind] = text[idx:end]
-    return sections["required"], sections["optional"]
-
-
 def _match_facility_categories(text: str) -> list[str]:
     t = text.lower()
     matched: list[str] = []
@@ -101,8 +79,8 @@ _EXCLUDE_MARKERS = ("빼", "제외", "말고")
 def _match_gu_filters(text: str) -> list[FilterClause]:
     """"강남구 안에서만"/"강남구는 빼고" 같은 구 포함·제외 요구를 규칙 기반으로
     근사한다. 알려진 25개 구 이름·별칭만 찾고, 그 뒤 몇 글자 안에 제외 마커가
-    있는지로 포함/제외를 가른다 — metric 필터처럼 자유 문장 의미 파악이
-    필요한 건 정확도가 떨어져 mock에서는 지원하지 않는다."""
+    있는지로 포함/제외를 가른다 — 자유 문장 의미 파악이 필요한 요구는 정확도가
+    떨어져 mock에서는 지원하지 않는다."""
     include, exclude = [], []
     for name in _KNOWN_GU_NAMES:
         idx = text.find(name)
@@ -122,7 +100,7 @@ def _match_gu_filters(text: str) -> list[FilterClause]:
 
 class MockLLM:
     def parse_intent(self, text: str) -> ParsedIntent:
-        required_part, optional_part = _split_required_optional(text)
+        required_part, optional_part = split_required_optional(text)
 
         # 4개 카테고리 라벨링과 '선택' 업종은 선택 요구사항 구역에서만 (마커가 없으면
         # optional_part == 전체 텍스트라 기존 자유 문장 동작과 100% 동일하다).

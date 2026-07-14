@@ -1,7 +1,7 @@
 """도구 실행기 — 행정동 단위. 서비스 계층에 위임.
 
 required_filters(FilterClause 목록)를 type별로 디스패치해 pool을 순서대로
-좁혀나간다: category → near(그룹별 OR/AND) → gu → metric → (대형병원, 특수케이스).
+좁혀나간다: category → near(그룹별 OR/AND) → gu → (대형병원, 특수케이스).
 새 필터 타입이 늘어도 여기 분기 하나 + scoring.py 실행 함수 하나만 추가하면
 된다 — LLM 호출 구조(입구 1회)는 그대로.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from app.data.csv_repository import CsvDongRepository
 from app.data.kakao_facility_repository import get_hybrid_facility_repository
-from app.schemas.tools import CompareTool, FilterClause, MetricLevel, RecommendTool
+from app.schemas.tools import CompareTool, FilterClause, RecommendTool
 from app.services import scoring
 
 # '근처'의 기본 반경 (동 중심점 기준). FilterClause.radius_km로 절별 override 가능.
@@ -30,26 +30,6 @@ GU_ALIASES: dict[str, list[str]] = {
     "도심권": ["종로구", "중구", "용산구"],
 }
 
-# metric 필터 대상 필드 — 화이트리스트 (LLM이 임의 문자열 못 만들게).
-# True = 값이 작을수록 좋음(invert), False = 클수록 좋음.
-METRIC_DIRECTIONS: dict[str, bool] = {
-    "crime_rate": True,
-    "cctv_cnt": False,
-    "conv_cnt": False,
-    "mart_cnt": False,
-    "hosp_cnt": False,
-    "bus_cnt": False,
-    "subway_access": False,
-    "park_cnt": False,
-}
-
-METRIC_LEVEL_CUTOFF: dict[MetricLevel, float] = {
-    MetricLevel.MODERATE: 0.5,
-    MetricLevel.STRICT: 0.3,
-    MetricLevel.VERY_STRICT: 0.15,
-}
-
-
 class ToolExecutor:
     def __init__(self, repo: CsvDongRepository):
         self.repo = repo
@@ -58,11 +38,11 @@ class ToolExecutor:
         raws = self.repo.all_metrics()
         scores = scoring.score_dongs(raws)
 
-        by_type: dict[str, list[FilterClause]] = {"category": [], "near": [], "gu": [], "metric": []}
+        by_type: dict[str, list[FilterClause]] = {"category": [], "near": [], "gu": []}
         for c in args.required_filters:
             by_type[c.type].append(c)
 
-        # CSV 우선, CSV에 없는 열린 키워드만 Kakao 폴백. gu/metric은 로컬
+        # CSV 우선, CSV에 없는 열린 키워드만 Kakao 폴백. gu는 로컬
         # 데이터만으로 되므로 이것들만 있을 땐 Kakao 저장소 자체를 안 만든다.
         facility_repo = (
             get_hybrid_facility_repository()
@@ -149,16 +129,6 @@ class ToolExecutor:
             reason = f"{label} 제외 대상" if c.exclude else f"{label} 안에 없음"
             disqualified.extend({"scores": s, "missing": [reason]} for s in gu_disq)
 
-        # --- metric: 지표 임계값 (API 불필요, 로컬 데이터만) ---
-        for c in by_type["metric"]:
-            invert = METRIC_DIRECTIONS.get(c.field)
-            if invert is None:
-                unresolved_required.append(f"{c.field} 조건")
-                continue
-            pool, metric_disq = scoring.partition_by_metric(
-                pool, c.field, METRIC_LEVEL_CUTOFF[c.level], invert, c.level.value)
-            disqualified.extend(metric_disq)
-
         # 대형병원 필수 — 특수 케이스로 그대로 유지 (rank() 내부 필터가 아니라
         # 실격 메커니즘으로 처리해야 disqualified/지도에서 안 사라짐).
         # 전부 미달이면 폴백으로 필터를 생략한다.
@@ -186,7 +156,7 @@ class ToolExecutor:
 
         # 지도 핀용 좌표 — 개발자/사용자가 필터 근거를 눈으로 검증할 수 있게.
         # 랜드마크(근처 기준점) + Kakao로 해석된 필수 업종의 실제 위치.
-        # CSV 출처 업종·gu·metric은 좌표가 없어 핀 없음.
+        # CSV 출처 업종·gu는 좌표가 없어 핀 없음.
         map_points = [
             {"label": name, "lon": lon, "lat": lat, "kind": "landmark"}
             for name, (lon, lat) in landmarks.items()

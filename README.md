@@ -139,7 +139,7 @@ Langfuse Tracing 대시보드에 전송합니다(코드 추가 수정 불필요)
 ## 지금 상태 / 다음 할 일
 
 - 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
-  필수조건 하드필터(`required_filters` — 업종/거리/행정구역/지표임계값 4종,
+  필수조건 하드필터(`required_filters` — 업종/거리/행정구역 3종,
   Kakao Local API 연동), 실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM
   경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`), 재시도를 포함한 실패 처리,
   Streamlit 지도 UI(`streamlit_app.py`, 위성/다크 풀스크린 지도), Docker Compose

@@ -36,7 +36,8 @@
   나눠 각각 다르게 처리(마커 없으면 전부 선택으로 취급, 하위호환). 하드필터에
   걸린 동은 각 필터 실행 함수가 "왜 떨어졌는지"(`missing` 목록)까지 함께
   반환 — UI가 이유를 보여줄 수 있음. (아래 "필수조건 필터 일반화" 항목이
-  이 스키마를 category/near/gu/metric 4종으로 확장한 최신 상태.)
+  이 스키마를 category/near/gu 3종으로 확장한 최신 상태 — metric은 이후
+  제거됨, "수치 지표 컷오프 필터 제거" 항목 참고.)
 - **임의 업종 조회 완성**: `app/data/facility_repository.py`가
   `dataset/소상공인시장진흥공단_상가(상권)정보_서울.csv`(원본, gitignore됨)를
   (자치구,행정동,업종소분류) 카운트로 집계해 지연 로딩 싱글턴으로 캐시한다.
@@ -142,6 +143,16 @@
   - 지도 클릭으로 선택한 동의 추천/비추천 이유를 카드로 보여주는 인터랙션은
     설계 검토까지만 완료(`st.plotly_chart(..., on_select="rerun",
     selection_mode="points")`로 실제 가능함을 확인함) — 구현은 다음 세션에서.
+- **수치 지표 상위권 컷오프 필터(metric) 제거**: `FilterClause(type="metric")`가
+  하던 "이 동네 지표가 서울 상위 N% 안에 들어야 함"(백분위 컷오프, moderate=
+  상위50%/strict=30%/very_strict=15%) 하드 필터를 프롬프트·백엔드 양쪽에서
+  완전히 뺐다 — 대부분의 지역을 실격(보라색)으로 만드는 주범이었다. 스키마
+  (`MetricLevel` enum, `FilterClause.field`/`level`), 실행 로직
+  (`scoring.partition_by_metric`, `tools.py`의 `METRIC_DIRECTIONS`/
+  `METRIC_LEVEL_CUTOFF`와 metric 디스패치 분기), 파싱 프롬프트의 4번째
+  타입 설명·`_METRIC_FIELDS` 치환을 모두 제거했다. `required_filters`는
+  이제 category/near/gu 3종만 남는다 — 필요하면 선택 요구사항(가중치
+  기반 점수화)으로 대체할 것.
 
 ## 파일 지도
 
@@ -153,8 +164,8 @@ scripts/
 app/
   schemas/
     domain.py      # DongRawMetrics, DongScores, Recommendation, CATEGORY_CAVEATS(가공방식 각주)
-    tools.py       # Importance(4단계 라벨), CategoryPreference, ParsedIntent, FilterClause,
-                   # MetricLevel 등 도구 스키마 (extra_categories=점수화, required_filters=하드필터)
+    tools.py       # Importance(4단계 라벨), CategoryPreference, ParsedIntent,
+                   # FilterClause 등 도구 스키마 (extra_categories=점수화, required_filters=하드필터)
   services/
     scoring.py     # 결정론적 계산: 분위수 정규화·스코어링·순위·필수조건 필터(+탈락사유)
   agent/

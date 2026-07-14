@@ -13,7 +13,7 @@ import types
 import pytest
 
 from app.agent.solar_llm import SolarLLM
-from app.schemas.tools import Importance, MetricLevel
+from app.schemas.tools import Importance
 
 
 def _stub_call(monkeypatch, response: str):
@@ -262,29 +262,6 @@ def test_parse_intent_gu_include_and_exclude(monkeypatch):
     intent = SolarLLM().parse_intent("강남구나 서초구 안에서만")
     gu = _clause_type(intent, "gu")[0]
     assert gu.gu == ["강남구", "서초구"] and gu.exclude is False
-
-
-def test_parse_intent_metric_clause_valid_field_and_level(monkeypatch):
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [{"type": "metric", "field": "crime_rate", "level": "strict"}],
-    }))
-    intent = SolarLLM().parse_intent("치안 꽤 좋은 곳만")
-    metric = _clause_type(intent, "metric")[0]
-    assert metric.field == "crime_rate" and metric.level == MetricLevel.STRICT
-
-
-def test_parse_intent_metric_clause_rejects_unknown_field(monkeypatch):
-    """화이트리스트 밖 field는 조용히 버려진다 — LLM이 임의 문자열을 지어내도
-    안전하게 무시(필터 전체 파싱 실패로 번지지 않음)."""
-    monkeypatch.setattr("app.agent.solar_llm.get_facility_repository", lambda: _FakeFacilityRepo())
-    _stub_call(monkeypatch, json.dumps({
-        "safety": "none", "convenience": "none", "mobility": "none", "environment": "none",
-        "required_filters": [{"type": "metric", "field": "존재하지않는필드", "level": "strict"}],
-    }))
-    intent = SolarLLM().parse_intent("아무 조건")
-    assert _clause_type(intent, "metric") == []
 
 
 def test_parse_intent_drops_category_clause_not_explicitly_mentioned_in_text(monkeypatch):

@@ -9,6 +9,36 @@ from __future__ import annotations
 
 import re
 
+# UI가 "필수 요구사항:"/"선택 요구사항:" 구역으로 나눠 보낼 때 쓰는 마커.
+# 마커가 없는 자유 문장은 전부 '선택 요구사항'으로 취급해 기존 동작을 그대로 유지한다.
+REQUIRED_MARKER = "필수 요구사항"
+OPTIONAL_MARKER = "선택 요구사항"
+
+
+def split_required_optional(text: str) -> tuple[str, str]:
+    """combined 텍스트를 (필수 구역, 선택 구역)으로 분리한다.
+
+    mock_llm.py와 solar_llm.py가 공유한다 — 원래 각자 구현이 따로 있었는데,
+    solar_llm.py 쪽이 이 분리 없이 전체 text를 그대로 검증에 써서 '선택
+    요구사항'에만 적힌 업종(예: "공원")이 required_filters 존재-검증을
+    통과해버리는 버그가 있었다(같은 단어가 텍스트 어딘가에 있기만 하면
+    통과하는 explicitly_requested_categories의 특성상). 필수/선택 구역을
+    먼저 나눠서 각 검증에 맞는 구역만 넘기면 이 오염이 원천 차단된다."""
+    markers = [
+        (idx, kind)
+        for marker, kind in ((REQUIRED_MARKER, "required"), (OPTIONAL_MARKER, "optional"))
+        for idx in [text.find(marker)]
+        if idx != -1
+    ]
+    if not markers:
+        return "", text
+    markers.sort()
+    sections = {"required": "", "optional": ""}
+    for i, (idx, kind) in enumerate(markers):
+        end = markers[i + 1][0] if i + 1 < len(markers) else len(text)
+        sections[kind] = text[idx:end]
+    return sections["required"], sections["optional"]
+
 
 _FACILITY_SYNONYMS: dict[str, tuple[str, ...]] = {
     "버거": ("버거", "햄버거"),

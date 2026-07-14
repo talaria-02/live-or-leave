@@ -7,7 +7,6 @@ from app.schemas.tools import (
     CompareTool,
     FilterClause,
     Importance,
-    MetricLevel,
     RecommendTool,
 )
 from tests.conftest import FakeRepo
@@ -198,47 +197,3 @@ def test_gu_filter_resolves_known_alias(sample_raws):
     ))
     dongs = {r["dong"] for r in result["recommendations"]}
     assert dongs == {"A동", "B동", "C동"}  # 강남3구=강남/서초/송파 → 셋 다 해당
-
-
-# ---------- metric 필터 (지표 임계값) — API 호출 없이 로컬 데이터만 ----------
-# crime_rate: A=10(최저·가장 안전), C=20, B=30(최고·가장 위험)
-
-def test_metric_filter_strict_keeps_only_top_tier(sample_raws):
-    executor = ToolExecutor(FakeRepo(sample_raws))
-    result = executor.recommend(RecommendTool(
-        preference=CategoryPreference(
-            safety=Importance.NONE, convenience=Importance.NONE,
-            mobility=Importance.NONE, environment=Importance.NONE),
-        required_filters=[FilterClause(type="metric", field="crime_rate", level=MetricLevel.STRICT)],
-        top_n=3,
-    ))
-    dongs = {r["dong"] for r in result["recommendations"]}
-    assert dongs == {"A동"}  # 상위 30% 안 = 가장 안전한 1곳만
-
-
-def test_metric_filter_moderate_is_more_lenient_than_strict(sample_raws):
-    executor = ToolExecutor(FakeRepo(sample_raws))
-    result = executor.recommend(RecommendTool(
-        preference=CategoryPreference(
-            safety=Importance.NONE, convenience=Importance.NONE,
-            mobility=Importance.NONE, environment=Importance.NONE),
-        required_filters=[FilterClause(type="metric", field="crime_rate", level=MetricLevel.MODERATE)],
-        top_n=3,
-    ))
-    dongs = {r["dong"] for r in result["recommendations"]}
-    assert dongs == {"A동", "C동"}  # 상위 50% 안 = 2곳
-
-
-def test_metric_filter_higher_is_better_field(sample_raws):
-    """park_cnt는 클수록 좋은 지표 — invert 방향이 crime_rate와 반대로 적용돼야 한다.
-    A=10(최다), C=6, B=3(최소)."""
-    executor = ToolExecutor(FakeRepo(sample_raws))
-    result = executor.recommend(RecommendTool(
-        preference=CategoryPreference(
-            safety=Importance.NONE, convenience=Importance.NONE,
-            mobility=Importance.NONE, environment=Importance.NONE),
-        required_filters=[FilterClause(type="metric", field="park_cnt", level=MetricLevel.STRICT)],
-        top_n=3,
-    ))
-    dongs = {r["dong"] for r in result["recommendations"]}
-    assert dongs == {"A동"}  # 공원 가장 많은 곳(=상위 30%)만 통과
