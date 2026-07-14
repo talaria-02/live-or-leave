@@ -83,7 +83,7 @@ def test_recommend_explain_stays_based_on_top_three_regardless_of_top_n():
     events = _parse_sse(resp.text)
     assert len(events[0]["data"]["recommendations"]) == 50
     full_message = "".join(e["text"] for e in events if e["type"] == "delta")
-    assert full_message.count("종합") == 3  # MockLLM.explain은 추천지마다 "종합 {score}" 한 번
+    assert full_message.count("**") == 6  # MockLLM.explain은 추천지마다 "**{구} {동}**" 제목 한 번(별표 2개)
 
 
 # ---------- /health: mock 여부 노출 (main.py도 streamlit_app.py와 같은 판단 공유) ----------

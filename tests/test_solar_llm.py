@@ -482,7 +482,7 @@ def test_explain_prompt_includes_unsupported_requirement_limits(monkeypatch):
     assert "현재 데이터로 직접 평가할 수 없는 사용자 요구" in captured["user"]
     assert "조용함/소음/방음" in captured["user"]
     assert "소음도" in captured["user"]
-    assert "별도 한계/보완 데이터" in captured["system"]
+    assert "자연스러운 한계 설명" in captured["system"]
 
 
 def test_explain_prompt_does_not_treat_current_jeonse_context_as_price_requirement(monkeypatch):

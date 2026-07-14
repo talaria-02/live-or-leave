@@ -162,51 +162,52 @@ def _fake_result(hosp_cnt: int, weights: dict | None = None,
     return result
 
 
-def test_explain_includes_raw_metric_values():
+def test_explain_names_the_dong_but_hides_raw_metric_values():
+    """Step 2/3 UX 개선: 내부 계산은 그대로 두되, 사용자 문장에는 raw 수치가
+    노출되면 안 된다 (hover/필터 검증 expander에 이미 별도로 노출되므로 중복 불필요)."""
     msg = MockLLM().explain("조용한 동네", _fake_result(hosp_cnt=1))
     assert "강남구 역삼동" in msg
-    assert "CCTV 2대" in msg
-    assert "편의점 3" in msg
-    assert "마트 4" in msg
-    assert "버스 5개" in msg
-    assert "공원 6곳" in msg
+    assert "CCTV" not in msg
+    assert "편의점 3" not in msg
+    assert "마트 4" not in msg
+    assert "버스 5개" not in msg
+    assert "공원 6곳" not in msg
 
 
 def test_explain_flags_missing_large_hospital():
     msg = MockLLM().explain("대형병원 근처였으면", _fake_result(hosp_cnt=0))
-    assert "요청하신 대형병원이 반경 내 없습니다." in msg
+    assert "다만 요청하신 대형병원은 근처에서 확인되지 않았습니다." in msg
 
 
 def test_explain_no_warning_when_hospital_present():
     msg = MockLLM().explain("대형병원 근처였으면", _fake_result(hosp_cnt=1))
-    assert "요청하신 대형병원이 반경 내 없습니다." not in msg
+    assert "다만 요청하신 대형병원은 근처에서 확인되지 않았습니다." not in msg
 
 
-def test_explain_states_selection_basis_from_weights_and_contributions():
+def test_explain_uses_natural_reasons_from_contributions_not_raw_numbers():
     result = _fake_result(
         hosp_cnt=1,
         weights={"safety": 0.5, "mobility": 0.5, "convenience": 0.0, "environment": 0.0},
         contributions={"safety": 0.4, "mobility": 0.3, "convenience": 0.0, "environment": 0.0},
     )
     msg = MockLLM().explain("안전하고 이동 편한 곳", result)
-    assert "선택 근거" in msg
-    assert "안전" in msg and "이동" in msg
-    assert "0.4" in msg and "0.3" in msg  # 실제 기여도 수치가 근거로 언급됨
-    assert "편의" not in msg.split("선택 근거")[1].split("\n")[0]  # 무관한 항목은 근거에서 제외
+    assert "체감 안전도" in msg  # safety 자연어 이유
+    assert "대중교통" in msg  # mobility 자연어 이유
+    assert "0.4" not in msg and "0.3" not in msg  # 실제 기여도 수치는 노출 안 됨
+    assert "편의점" not in msg  # 기여도 0인 항목은 이유로 언급 안 됨
 
 
 def test_explain_falls_back_gracefully_without_weights_or_contributions():
     """weights/contributions가 없어도(구버전 호출) 죽지 않고 균형 문구로 대체돼야 한다."""
     msg = MockLLM().explain("아무 텍스트", _fake_result(hosp_cnt=1))
-    assert "선택 근거" in msg
+    assert "여러 조건을 고르게 충족하는 동네입니다" in msg
 
 
 def test_explain_appends_caveat_for_prioritized_category():
     result = _fake_result(hosp_cnt=1, weights={
         "safety": 1.0, "convenience": 0.0, "mobility": 0.0, "environment": 0.0})
     msg = MockLLM().explain("안전한 곳", result)
-    assert "[데이터 안내]" in msg
-    assert "자치구 값을 공통 적용" in msg  # safety 각주 (구 상속)
+    assert "자치구 값을 공통 적용" in msg  # safety 각주 (구 상속) — 숫자 없이 방법론만 설명
 
 
 def test_explain_omits_caveats_for_categories_the_user_did_not_prioritize():
@@ -216,23 +217,23 @@ def test_explain_omits_caveats_for_categories_the_user_did_not_prioritize():
     assert "최근접 역까지 거리" not in msg  # mobility 각주는 언급 안 됨
 
 
-def test_explain_has_no_caveat_block_when_no_weights_given():
+def test_explain_has_no_caveat_when_no_weights_given():
     msg = MockLLM().explain("아무 텍스트", _fake_result(hosp_cnt=1))
-    assert "[데이터 안내]" not in msg
+    assert "참고:" not in msg
 
 
 def test_explain_reports_extra_facility_count_when_present():
     result = _fake_result(hosp_cnt=1)
     result["recommendations"][0]["extra_facilities"] = {"버거": 3}
     msg = MockLLM().explain("버거집 있는 곳", result)
-    assert "버거: 해당 행정동에 3곳" in msg
+    assert "버거" in msg and "3곳" in msg
 
 
 def test_explain_flags_extra_facility_not_found():
     result = _fake_result(hosp_cnt=1)
     result["recommendations"][0]["extra_facilities"] = {"헬스장": 0}
     msg = MockLLM().explain("헬스장 있는 곳", result)
-    assert "요청하신 '헬스장' 관련 시설이 이 행정동에는 없어 반영되지 않았습니다." in msg
+    assert "다만 요청하신 '헬스장'은 이 동네에서는 확인되지 않았습니다." in msg
 
 
 def test_explain_notes_extra_facility_counting_methodology():
@@ -252,7 +253,6 @@ def test_explain_reports_unsupported_noise_and_soundproofing_limits():
         "집에서 집중해야 해서 조용하고 방음이 잘 되는 곳, 공원도 가까운 곳",
         _fake_result(hosp_cnt=1),
     )
-    assert "[현재 데이터 한계]" in msg
     assert "조용함/소음/방음" in msg
     assert "소음도" in msg
 
