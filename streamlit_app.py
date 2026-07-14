@@ -38,6 +38,7 @@ UPSTAGE_API_KEY가 없으면 자동으로 mock으로 낮춘다(load_agent 참고
 from __future__ import annotations
 
 import json
+import statistics
 from dataclasses import asdict
 
 import pandas as pd
@@ -53,16 +54,17 @@ from app.schemas.tools import FilterClause
 
 st.set_page_config(page_title="살래말래 — 행정동 추천", layout="wide")
 
-# 티어 컷오프는 절대 개수가 아니라 결과 개수(n) 대비 비율로 정한다 — gu·근처
-# 필터를 걸면 n이 424개(서울 전체)에서 수십 개로 줄어드는데, 예전처럼 절대
-# 개수(10/20/10)를 그대로 쓰면 필터링된 소수의 후보 거의 전부가 top1/top2로
-# 찍혀버린다(neutral 구간이 통째로 사라짐). 비율 기준(n=424일 땐 기존과 동일한
-# 10/20/5)으로 바꾸면 필터 후에도 상위·하위 구분이 유지된다. 단 n이 아무리
-# 작아도 1등은 항상 표시되도록 각 티어 최소 1개는 보장한다.
-TOP1_FRAC = 0.024    # 진한초록(top1) 비율
-TOP2_FRAC = 0.047    # 연한초록(top2) 비율
-BOTTOM_FRAC = 0.012  # 저점수(빨강, low_score) 비율. 필수조건 미충족(보라)은 개수 제한
-                     # 없이 전부 그린다 — 일부만 그리면 지도에 구멍이 뚫린다.
+# 티어 컷오프는 고정 개수·고정 비율이 아니라 z-score(평균에서 몇 표준편차
+# 떨어져 있는지)로 정한다. Jenks natural breaks도 시도해봤지만 k개 그룹으로
+# "무조건" 강제 분할하는 방식이라 강도 조절이 안 됐다(실제 서울 동 점수
+# 분포가 뚜렷한 소수 엘리트 구조가 아니라 고르게 퍼져있어서, Jenks로도
+# 필터 후 결과의 30%+ 가 top1로 찍히는 경우가 실측됨). z-score는 threshold
+# 자체를 조절할 수 있어 "상위 X%만 두드러지게 보이기"라는 원래 목적에
+# 맞게 강도를 튜닝했다(1.5σ 이상만 top1 — 실측 결과 전체 기준 top1 6%대,
+# neutral 66%대로 원래 의도한 분포에 가장 가까웠다).
+Z_TOP1 = 1.5     # 평균 + 1.5σ 초과 → top1(진한초록)
+Z_TOP2 = 0.75    # 평균 + 0.75σ 초과 → top2(연한초록)
+Z_LOW = -1.5     # 평균 - 1.5σ 미만 → low_score(빨강)
 
 TIER_COLORS = {
     "top1": "#1b5e20",
@@ -204,26 +206,41 @@ def _hover_for_disqualified(d: dict) -> str:
             f"필수 요구사항 미충족: {', '.join(d['missing'])}")
 
 
-def assign_tiers(recommendations: list[dict], disqualified: list[dict]) -> pd.DataFrame:
-    n = len(recommendations)
-    top1_n = min(n, max(1, round(n * TOP1_FRAC))) if n else 0
-    top2_n = min(n - top1_n, max(1, round(n * TOP2_FRAC))) if n - top1_n else 0
-    bottom_n = (min(n - top1_n - top2_n, max(1, round(n * BOTTOM_FRAC)))
-                if n - top1_n - top2_n else 0)
-    rows = []
-    for i, rec in enumerate(recommendations):
-        if i < top1_n:
-            tier = "top1"
-        elif i < top1_n + top2_n:
-            tier = "top2"
-        elif i >= n - bottom_n:
-            tier = "low_score"
+def _zscore_tier_labels(scores: list[float]) -> list[str]:
+    """점수 리스트(순서 유지) → 각 항목의 티어 이름. 평균·표준편차 대비
+    z-score로 분류한다 — 표준편차가 0(전부 동점)이거나 n<2면 구분 불가하니
+    전부 neutral 처리."""
+    n = len(scores)
+    if n < 2:
+        return ["neutral"] * n
+    mean = statistics.mean(scores)
+    std = statistics.pstdev(scores)
+    if std == 0:
+        return ["neutral"] * n
+
+    tiers = []
+    for s in scores:
+        z = (s - mean) / std
+        if z > Z_TOP1:
+            tiers.append("top1")
+        elif z > Z_TOP2:
+            tiers.append("top2")
+        elif z < Z_LOW:
+            tiers.append("low_score")
         else:
-            tier = "neutral"
-        rows.append({
+            tiers.append("neutral")
+    return tiers
+
+
+def assign_tiers(recommendations: list[dict], disqualified: list[dict]) -> pd.DataFrame:
+    tiers = _zscore_tier_labels([rec["total_score"] for rec in recommendations])
+    rows = [
+        {
             "code": rec["scores"]["code"], "gu": rec["gu"], "dong": rec["dong"],
             "tier": tier, "hover": _hover_for_recommendation(rec),
-        })
+        }
+        for rec, tier in zip(recommendations, tiers)
+    ]
 
     # 실격 동은 전부 그린다 — 일부만 그리면 나머지가 지도에서 통째로 사라져
     # 구멍이 뚫린다. 필수 필터 결과 수백 개가 실격될 수 있는데(예: 클라이밍장
@@ -260,7 +277,7 @@ POINT_STYLE = {
     # 적용 안 됐다는 걸 색으로 구분한다. 후보를 바꿔 눌러보면 이 핀이 바로 옮겨간다.
     "preview": dict(color="#ff9100"),
 }
-POINT_LABELS = {"landmark": "기준 장소", "preview": "기준 장소 (미리보기)"}
+POINT_LABELS = {"landmark": "선택한 장소", "preview": "선택한 장소 (미리보기)"}
 
 
 def render_map(
@@ -433,7 +450,7 @@ def _resolve_near_clause(
 
     repo = get_hybrid_facility_repository()
     if not repo.near_resolvable():
-        st.caption("⚠ Kakao API 키가 없어 기준 장소 검색을 쓸 수 없습니다.")
+        st.caption("⚠ Kakao API 키가 없어 장소 검색을 쓸 수 없습니다.")
         return FilterClause(type="near", place=place_text, radius_km=radius_km), None
 
     candidates = repo.search_place_candidates(place_text)
@@ -491,30 +508,30 @@ def _app_body(geojson: dict) -> None:
     panel = st.container(key="panel")
     with panel:
         st.subheader("살래말래")
-        st.caption("필수 사항은 선호로 반영되고, 구·기준 장소(옵션)는 하드 필터로 적용됩니다.")
+        st.caption("자유롭게 적은 내용은 선호로 반영되고, 자치구·이 장소 근처만 보기(옵션)는 하드 필터로 적용됩니다.")
         if using_mock_llm():
             st.caption(f"⚠ Mock LLM으로 동작 중 ({_mock_llm_reason()})")
 
         preference_text = st.text_area(
-            "필수 사항",
+            "어떤 동네를 찾으세요?",
             placeholder="예: 안전하고 조용한 곳, 지하철 가까운 곳, 헬스장 있으면 좋겠어요",
             height=150,
         )
 
         st.markdown("**옵션 — 조건으로 좁히기**")
         gu_selected = st.multiselect(
-            "구 선택", SEOUL_GU, help="선택한 구 안에서만(또는 제외하고) 찾습니다.")
+            "자치구 선택하기", SEOUL_GU, help="선택한 자치구 안에서만(또는 제외하고) 찾습니다.")
         gu_exclude = st.checkbox(
-            "선택한 구 제외하기", value=False,
-            help="체크하면 선택한 구를 뺀 나머지 지역에서만 찾습니다.")
+            "선택한 자치구 제외하기", value=False,
+            help="체크하면 선택한 자치구를 뺀 나머지 지역에서만 찾습니다.")
         place_col, radius_col, search_col = st.columns([3, 1.2, 1])
         with place_col:
             place_text = st.text_input(
-                "기준 장소", placeholder="예: 서울대병원, 강남역, 성남시청, 주소 등")
+                "이 장소 근처만 보기", placeholder="예: 서울대병원, 강남역, 성남시청, 주소 등")
         with radius_col:
             radius_km = st.number_input(
                 "반경(km)", min_value=0.5, max_value=50.0, value=3.0, step=0.5,
-                help="기준 장소에서 이 거리 이내 동만 통과시킵니다.")
+                help="선택한 장소에서 이 거리 이내 동만 통과시킵니다.")
         with search_col:
             st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
             st.button("검색", type="primary", width="stretch")
@@ -544,7 +561,7 @@ def _app_body(geojson: dict) -> None:
             preference_text, using_mock_llm(), PIPELINE_VERSION, required_filters_json)
 
     if is_empty_submit:
-        message_slot.info("필수 사항을 입력하거나 구·기준 장소 중 하나 이상 지정한 뒤 눌러주세요.")
+        message_slot.info("내용을 입력하거나 자치구·이 장소 근처만 보기 중 하나 이상 지정한 뒤 눌러주세요.")
 
     result = st.session_state.get("last_result")
     if result is None:
