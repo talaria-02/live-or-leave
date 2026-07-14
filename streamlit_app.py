@@ -1,11 +1,15 @@
 """
 Streamlit UI — 서울 지도를 항상 보여주고, 오른쪽 입력창에 필수/선택 요구사항을
-입력하면(포커스를 벗어나는 순간) 지도가 자동으로 다시 그려진다.
+입력한 뒤 "동네 추천하기" 버튼을 눌러야 추천이 실행된다.
 
-흐름: 우측 입력(필수/선택) → RecommendationAgent.run(top_n=전체) 자동 호출
+흐름: 우측 입력(필수/선택) → [버튼 클릭] → RecommendationAgent.run(top_n=전체)
       → 상위 top_n1(진한초록)/다음 top_n2(연한초록)/하위 절반(저점수 빨강)+
         절반(필수조건 미충족 보라) 티어링 → 좌측에 지도, 동에 마우스오버하면
         실제 수치를 툴팁으로. 서울 밖은 베이스맵 자체를 꺼서 아예 안 그린다.
+
+버튼을 누르기 전까지는 텍스트를 아무리 고쳐도 LLM 호출이 일어나지 않는다.
+마지막으로 계산된 결과는 st.session_state에 저장해두고, 버튼 클릭이 아닌
+다른 위젯(지도 스타일 등) 조작으로 인한 rerun에서도 그 결과를 계속 보여준다.
 
 티어링·hover 텍스트 조립은 결정론적 포맷팅일 뿐이라 LLM을 안 쓴다 — LLM은
 result.message(상위 3개 자연어 설명) 하나에만 관여한다 (agent.run 참고).
@@ -385,6 +389,12 @@ def _app_body(geojson: dict) -> None:
     지도를 내용(색·핀)이 바뀔 때마다 완전히 새 컴포넌트로 마운트하는 동작이라
     (uirevision을 걸어도 이 조합에서는 카메라가 리셋됨, 직접 확인함), 그건
     커스텀 JS 브릿지 없이는 못 고치는 프레임워크 한계로 받아들인다.
+
+    st.button()은 그 버튼이 눌린 단 한 번의 rerun에서만 True를 반환하고,
+    그 외 모든 rerun(다른 위젯 조작·재입력 중 blur)에서는 False다. 그래서
+    "combined 텍스트가 있으면 무조건 실행"이 아니라 "버튼을 누른 rerun에서만
+    실행"으로 게이트를 걸 수 있다. 계산 결과는 session_state["last_result"]에
+    저장해, 버튼을 안 누른 rerun에서도 마지막 추천/지도를 계속 보여준다.
     """
     panel = st.container(key="panel")
     with panel:
@@ -396,25 +406,37 @@ def _app_body(geojson: dict) -> None:
             "필수 요구사항", placeholder="예: 헬스장, 대형병원 있어야 함", height=100)
         optional_text = st.text_area(
             "선택 요구사항", placeholder="예: 안전하고 조용한 곳, 지하철 가까운 곳", height=150)
+        submitted = st.button("동네 추천하기", width="stretch", type="primary")
         message_slot = st.empty()
         style_name = st.selectbox(
             "지도 스타일", list(MAP_STYLES), index=list(MAP_STYLES).index(DEFAULT_MAP_STYLE))
         show_core = st.checkbox("서울 핵심시설 표시", value=True)
     map_kw = dict(map_style=MAP_STYLES[style_name], show_core=show_core)
 
-    if not required_text.strip() and not optional_text.strip():
+    # 버튼을 누른 rerun에서만 LLM을 호출한다 — 그 외의 rerun(다른 위젯 조작,
+    # 텍스트 입력 중 blur)은 session_state에 저장해둔 마지막 결과를 그대로 쓴다.
+    is_empty_submit = submitted and not required_text.strip() and not optional_text.strip()
+    if submitted and not is_empty_submit:
+        combined = f"필수 요구사항: {required_text}\n선택 요구사항: {optional_text}"
+        st.session_state["last_result"] = run_agent_cached(
+            combined, using_mock_llm(), PIPELINE_VERSION)
+
+    if is_empty_submit:
+        message_slot.info("필수 또는 선택 요구사항을 하나 이상 입력한 뒤 눌러주세요.")
+
+    result = st.session_state.get("last_result")
+    if result is None:
         render_map(neutral_dataframe(geojson), geojson, **map_kw)
         return
-
-    combined = f"필수 요구사항: {required_text}\n선택 요구사항: {optional_text}"
-    result = run_agent_cached(combined, using_mock_llm(), PIPELINE_VERSION)
 
     if result["kind"] == "clarify":
-        message_slot.warning(result["message"])
+        if not is_empty_submit:
+            message_slot.warning(result["message"])
         render_map(neutral_dataframe(geojson), geojson, **map_kw)
         return
 
-    message_slot.success(result["message"])
+    if not is_empty_submit:
+        message_slot.success(result["message"])
     data = result["data"]
     if data.get("unresolved_requirements"):
         with panel:
