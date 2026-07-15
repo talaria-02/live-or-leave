@@ -23,8 +23,11 @@ def using_mock_llm() -> bool:
 
     UPSTAGE_API_KEY가 없는 환경(로컬 UI 개발 등)에서 그대로 두면 API 호출이
     실패하므로 자동으로 MockLLM으로 낮춘다. 키가 있어도 레이아웃·색깔 확인처럼
-    빠른 반복 작업만 할 땐 USE_MOCK_LLM=1로 강제로 mock을 쓸 수 있다."""
-    return not os.environ.get("UPSTAGE_API_KEY") or bool(os.environ.get("USE_MOCK_LLM"))
+    빠른 반복 작업만 할 땐 USE_MOCK_LLM=1로 강제로 mock을 쓸 수 있다.
+
+    환경변수 값은 문자열이라 bool()만으로는 "0"도 참으로 취급돼버린다 —
+    "1"/"true"일 때만 강제 mock으로 인정한다."""
+    return not os.environ.get("UPSTAGE_API_KEY") or os.environ.get("USE_MOCK_LLM", "").lower() in ("1", "true")
 
 
 def mock_llm_reason() -> str:

@@ -55,6 +55,18 @@ def test_using_mock_llm_empty_string_flag_does_not_force_mock(monkeypatch):
     assert using_mock_llm() is False
 
 
+def test_using_mock_llm_string_zero_does_not_force_mock(monkeypatch):
+    """USE_MOCK_LLM="0"은 "끄겠다"는 의도이므로 강제 mock이 켜지면 안 된다.
+
+    환경변수는 항상 문자열이라 bool("0")은 파이썬에서 True다 — 순진하게
+    bool()로만 판단하면 "0"도 "설정됨"으로 오인해 정반대로 동작하는 버그가
+    난다. .env에 USE_MOCK_LLM=0을 써서 실 API를 쓰려 했는데 계속 mock으로
+    떨어지던 실제 사고에서 발견됨."""
+    monkeypatch.setenv("UPSTAGE_API_KEY", "real-key")
+    monkeypatch.setenv("USE_MOCK_LLM", "0")
+    assert using_mock_llm() is False
+
+
 # ---------- mock_llm_reason(): 사유 문구 + 키 노출 금지 ----------
 
 def test_mock_llm_reason_reports_missing_key(monkeypatch):
