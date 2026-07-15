@@ -183,11 +183,17 @@ class SolarLLM:
         raw = self._call(_build_parse_system(), text)
         try:
             data = json.loads(raw.strip().strip("`").lstrip("json").strip())
+            # 모델이 "언급 안 된 카테고리"를 프롬프트 지시(4단계 라벨 중 하나)를
+            # 어기고 빈 문자열로 채우는 경우가 실측됨(예: safety=""). 빈 값·누락은
+            # "none"(관계없음)으로 관대하게 처리한다 — 안 그러면 Importance("")가
+            # ValueError를 던져 이 함수 전체가 except로 떨어지고, 카테고리 3개는
+            # 이미 잘 파싱됐어도(예: environment=high) 전부 버려진 채 강제
+            # 되묻기로 빠진다(부분 파싱 실패가 전체 실패로 확대되는 문제).
             pref = CategoryPreference(
-                safety=Importance(data["safety"]),
-                convenience=Importance(data["convenience"]),
-                mobility=Importance(data["mobility"]),
-                environment=Importance(data["environment"]),
+                safety=Importance(data.get("safety") or "none"),
+                convenience=Importance(data.get("convenience") or "none"),
+                mobility=Importance(data.get("mobility") or "none"),
+                environment=Importance(data.get("environment") or "none"),
             )
             categories = get_facility_repository().categories()
             extra = [c for c in data.get("extra_categories", []) if c in categories]

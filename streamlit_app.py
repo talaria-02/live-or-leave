@@ -170,6 +170,19 @@ def load_boundaries() -> dict:
 
 
 @st.cache_data
+def dong_centroids(geojson: dict) -> dict[str, tuple[float, float]]:
+    """행정동 코드 → 중심점(lon, lat). 상위 3개 추천지를 지도에 점으로
+    찍을 때 좌표가 필요한데, recommendations 안엔 코드만 있고 좌표가 없어
+    geojson 폴리곤에서 직접 계산한다(Kakao API 불필요 — 로컬 계산)."""
+    from shapely.geometry import shape
+
+    return {
+        f["properties"]["code"]: (shape(f["geometry"]).centroid.x, shape(f["geometry"]).centroid.y)
+        for f in geojson["features"]
+    }
+
+
+@st.cache_data
 def load_outside_seoul_mask() -> dict:
     """서울 바깥 전체(지도가 확대/축소돼도 안 뚫리도록 지구 전체 범위)를 덮는
     마스크 폴리곤 — 구멍이 정확히 서울 426개 동의 합집합 모양이다. 위성사진
@@ -276,8 +289,14 @@ POINT_STYLE = {
     # 기준 장소 후보를 고르는 중(추천 실행 전) 미리보기: 주황 원 — 아직
     # 적용 안 됐다는 걸 색으로 구분한다. 후보를 바꿔 눌러보면 이 핀이 바로 옮겨간다.
     "preview": dict(color="#ff9100"),
+    # 대시보드 설명(explain)이 실제로 언급하는 상위 3개 동 — 지도에서도
+    # 바로 찾을 수 있게 보라색 점으로 별도 표시. top1/top2 tier 색(초록)과
+    # 겹쳐도 구분되도록 원 마커를 얹는다.
+    "top3": dict(color="#aa00ff"),
 }
-POINT_LABELS = {"landmark": "선택한 장소", "preview": "선택한 장소 (미리보기)"}
+POINT_LABELS = {
+    "landmark": "선택한 장소", "preview": "선택한 장소 (미리보기)", "top3": "상위 3개 추천",
+}
 
 
 def render_map(
@@ -348,14 +367,14 @@ def render_map(
     # 삼각형으로 렌더링되는 문제가 있었다. marker.symbol="triangle"도 색이
     # 안 먹는 건 마찬가지라(둘 다 시도해봤음) — 대신 색이 확실히 먹는 원형
     # 마커(핵심시설 마커와 동일 방식)를 크게 키워 눈에 띄게 한다.
-    for kind in ("preview", "landmark"):  # 확정 핀이 위에 오도록 마지막에
+    for kind in ("preview", "landmark", "top3"):  # 상위 3개 추천 점이 맨 위에 오도록 마지막에
         pts = [p for p in (points or []) if p["kind"] == kind]
         if pts:
             color = POINT_STYLE[kind]["color"]
             fig.add_scattermap(
                 lon=[p["lon"] for p in pts], lat=[p["lat"] for p in pts],
                 mode="markers",
-                marker=dict(size=20, color=color),
+                marker=dict(size=14, color=color),
                 name=POINT_LABELS[kind],
                 hovertext=[p["label"] for p in pts],
                 hovertemplate="%{hovertext}<extra></extra>",
@@ -415,6 +434,15 @@ FULLSCREEN_CSS = """
     backdrop-filter: blur(10px);
     padding: 1.4rem 1.2rem;
     box-shadow: -6px 0 24px rgba(0, 0, 0, 0.45);
+    /* 패널 배경은 테마와 무관하게 항상 어둡게 고정돼 있는데, 글자색은
+       고정 안 해두면 Streamlit이 브라우저 prefers-color-scheme(라이트/
+       다크)을 따라간다 — 라이트 모드에서 어두운 글자색 + 어두운 배경이
+       겹쳐 거의 안 보이는 문제가 있었다. 배경이 항상 어두우니 글자색도
+       항상 밝게 고정한다. */
+    color: #f5f5f7;
+}
+.st-key-panel * {
+    color: inherit;
 }
 /* 버그: 추천 실행 후 패널 콘텐츠(메시지+필터 검증 expander+trace 텍스트)가
    늘어나 100vh를 넘으면, 브라우저가 스크롤 대신 일부 위젯을 찌그러뜨려
@@ -582,7 +610,13 @@ def _app_body(geojson: dict) -> None:
             st.warning("해석하지 못한 필수 조건 (필터 미적용): "
                        + ", ".join(data["unresolved_requirements"]))
     df = assign_tiers(data["recommendations"], data.get("disqualified", []))
-    render_map(df, geojson, points=(data.get("map_points") or []) + preview_points, **map_kw)
+    centroids = dong_centroids(geojson)
+    top3_points = [
+        {"label": f"{rec['gu']} {rec['dong']}", "lon": centroids[rec["scores"]["code"]][0],
+         "lat": centroids[rec["scores"]["code"]][1], "kind": "top3"}
+        for rec in data["recommendations"][:3] if rec["scores"]["code"] in centroids
+    ]
+    render_map(df, geojson, points=(data.get("map_points") or []) + preview_points + top3_points, **map_kw)
 
     with panel, st.expander("🔍 적용된 필터 검증"):
         st.caption(f"추천 {len(data['recommendations'])}개 / "
