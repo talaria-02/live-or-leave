@@ -55,8 +55,8 @@ build_dong_boundaries.py  # 원본 shapefile → dong_boundaries.geojson 생성 
 dong_metrics.csv          # 행정동 424개 지표 테이블 (커밋됨, 앱 실행에 바로 필요)
 dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 커밋됨)
 demo.py                   # 시나리오 데모 실행
-streamlit_app.py          # 지도 UI (필수/선택 요구사항 입력 → "동네 추천하기" 버튼 → 티어링 지도)
-tests/                    # pytest 206개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)
+streamlit_app.py          # 지도 UI (자유 텍스트 선호 + 구조화 필터(자치구/기준장소) 입력 → "동네 추천하기" 버튼 → 티어링 지도)
+tests/                    # pytest 181개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)
 ```
 
 ## 실행 방법

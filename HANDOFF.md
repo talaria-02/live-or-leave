@@ -624,7 +624,7 @@ pip install -r requirements.txt   # litellm/fastapi/streamlit 등 포함, Python
 python demo.py                    # 시나리오 데모 (실제 Solar API, .env 필요)
 uvicorn main:app --reload         # FastAPI 서버 (http://127.0.0.1:8000)
 streamlit run streamlit_app.py    # 지도 UI (http://localhost:8501)
-python -m pytest tests/           # 전체 유닛테스트 (206개, MockLLM 기반, 키 없이도 실행됨)
+python -m pytest tests/           # 전체 유닛테스트 (181개, MockLLM 기반, 키 없이도 실행됨)
 python build_dong_metrics.py      # 지표 테이블 재생성 (dataset/ 원본 CSV 필요)
 python build_dong_boundaries.py   # 지도 GeoJSON 재생성 (space_info/ 원본 shapefile 필요)
 ```
@@ -772,17 +772,21 @@ streamlit run streamlit_app.py                  # .env에 키 있으면 실제 S
 USE_MOCK_LLM=1 streamlit run streamlit_app.py    # 빠른 반복 작업용: 강제 mock
 ```
 
-화면 전체가 지도(기본 스타일: 어두움, 사이드바에서 위성사진 등으로 전환 가능)고
-우측에 반투명 입력 패널이 뜬다. "필수 요구사항"/"선택 요구사항" 칸에 입력하고
-**"동네 추천하기" 버튼을 눌러야** 추천이 실행된다(텍스트만 고치는 동안은
-LLM 호출 없이 지도가 그대로 유지됨). 예:
+화면 전체가 지도(기본 스타일: 어두움)고, 우측에 반투명 입력 패널이 뜬다(지도
+스타일 전환 셀렉트박스도 사이드바가 아니라 이 패널 안에 있다). "어떤 동네를
+찾으세요?" 자유 텍스트 칸에 선호를 적고, 하드필터가 필요하면 그 아래 "옵션 —
+조건으로 좁히기"에서 자치구를 멀티셀렉트로 고르거나(제외하기 체크박스도 있음)
+"이 장소 근처만 보기"에 장소를 검색해 Kakao 후보 중 하나를 고르고 반경(km)을
+지정한다 — 구·기준 장소는 LLM이 자연어에서 추론하지 않고 이 UI 입력을 코드가
+그대로 `FilterClause`로 옮긴다. **"동네 추천하기" 버튼을 눌러야** 추천이
+실행된다(텍스트만 고치는 동안은 LLM 호출 없이 지도가 그대로 유지됨). 예:
 
-- 필수: `헬스장 있어야 함` / 선택: `안전하고 무서운 밤길 없는 조용한 동네`
-  → 헬스장 없는 동은 보라색(비추천·필수미충족)으로, 나머지는 안전+환경
-  가중치로 초록(추천)/빨강(비추천·저점수)/회색(그 외)으로 티어링된다.
-  상단 메시지에는 "mobility 가중치 0.526" 같은 내부 수치 대신 "대중교통
-  접근성이 좋아..." 식 자연어 설명이 뜬다(raw 수치는 hover/"🔍 적용된 필터
-  검증" expander에서 확인).
+- 자유 텍스트: `안전하고 조용한 곳이면 좋겠어요` + 자치구 선택: `강남구`, `서초구`
+  → 선택한 자치구 밖은 실격(보라색)으로, 나머지는 안전+환경 가중치로
+  초록(추천)/빨강(비추천·저점수)/회색(그 외)으로 티어링된다. 상단 메시지에는
+  근거 설명 상위 3개 동이 지도에 보라색 점으로도 함께 표시된다. 메시지에는
+  "mobility 가중치 0.526" 같은 내부 수치 대신 "대중교통 접근성이 좋아..." 식
+  자연어 설명이 뜬다(raw 수치는 hover/"🔍 적용된 필터 검증" expander에서 확인).
 
 `.env`에 `UPSTAGE_API_KEY`가 없으면 `load_agent()`가 자동으로 mock으로 낮추고
 화면 상단에 "⚠ Mock LLM으로 동작 중 (UPSTAGE_API_KEY 없음)" 캡션이 뜬다 — 앱이
