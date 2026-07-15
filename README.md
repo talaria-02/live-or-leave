@@ -59,8 +59,13 @@ app/
     kakao_facility_repository.py # Kakao Local API — "이 장소 근처만 보기" 거리 필터, 기준 장소 후보 검색
 build_dong_metrics.py     # 원본 공공데이터 → dong_metrics.csv 생성 파이프라인
 build_dong_boundaries.py  # 원본 shapefile → dong_boundaries.geojson 생성 (지도 UI용)
+scripts/
+  sample_qutument_personas.py   # Nemotron-Personas-Korea에서 페르소나 표본 추출
+  build_persona_scenarios.py    # 표본 페르소나 → require.md용 시나리오(persona_scenarios_30.csv) 생성
+data/personas/            # 페르소나 표본·커버리지 산출물 (require.md 시나리오의 근거 데이터, 런타임 미사용)
 dong_metrics.csv          # 행정동 424개 지표 테이블 (커밋됨, 앱 실행에 바로 필요)
 dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 커밋됨)
+seoul_gu.geojson          # 서울 자치구 25개 경계 (자치구 하드필터 지도 표시용, 커밋됨)
 demo.py                   # 시나리오 데모 실행
 streamlit_app.py          # 지도 UI (자유 텍스트 선호 + 구조화 필터(자치구/이 장소 근처만 보기) 입력 → "동네 추천하기" 버튼 → 티어링 지도)
 tests/                    # pytest 181개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)

@@ -434,27 +434,26 @@ FULLSCREEN_CSS = """
     backdrop-filter: blur(10px);
     padding: 1.4rem 1.2rem;
     box-shadow: -6px 0 24px rgba(0, 0, 0, 0.45);
-    /* 패널 배경은 테마와 무관하게 항상 어둡게 고정돼 있는데, 글자색은
-       고정 안 해두면 Streamlit이 브라우저 prefers-color-scheme(라이트/
-       다크)을 따라간다 — 라이트 모드에서 어두운 글자색 + 어두운 배경이
-       겹쳐 거의 안 보이는 문제가 있었다. 배경이 항상 어두우니 글자색도
-       항상 밝게 고정한다. */
-    color: #f5f5f7;
+    /* 패널 자체에는 글자색을 안 건다 — text_area 등 입력 위젯은 자기 색을
+       따로 안 갖고 이 컨테이너에서 상속받는데, 여기서 강제로 밝게 고정하면
+       "밝은 입력창 배경(라이트 테마) + 밝은 글자"가 겹쳐 타이핑한 글자가
+       안 보이는 버그가 난다(직접 타이핑해 재현·확인함 — placeholder는
+       별도 스타일이라 멀쩡해 보여서 처음엔 못 잡았던 버그). 배경이 항상
+       어두운 건 이 패널뿐이고 입력창 자체 배경은 테마를 그대로 따라가므로,
+       입력창 글자색도 강제하지 않고 테마 기본값(자기 배경과 이미 짝지어짐)에
+       맡긴다. */
 }
-/* 위 색은 "패널 배경(항상 어두움) 위에 직접 얹히는 순수 텍스트"에만 강제
-   적용한다 — 위젯 라벨(stWidgetLabel), 본문/캡션(stMarkdownContainer/
-   stCaptionContainer), 제목(stHeading)이 여기 해당한다.
-   text_area·multiselect·selectbox·number_input 등은 제외한다 — 이런
-   위젯은 패널이 아니라 자기 자신의 입력창/드롭다운 배경(테마별로 밝거나
-   어두움)을 따로 갖고 있어서, 위 색을 거기까지 강제하면 "밝은 배경 +
-   밝은 글자"처럼 자기 배경과 안 맞아 오히려 안 보이게 된다(직접 재현해
-   확인함 — 처음엔 `.st-key-panel *`로 전부 강제했다가 입력창 글자가
-   안 보이는 회귀가 생겼다). 이 위젯들은 Streamlit 기본 글자색(테마에 맞게
-   자기 배경과 이미 짝지어져 있음)을 그대로 두는 게 맞다. */
+/* 패널 배경(항상 어두움) 위에 직접 얹히는 순수 텍스트만 밝은 색으로 강제
+   고정한다 — 위젯 라벨(stWidgetLabel), 본문/캡션(stMarkdownContainer/
+   stCaptionContainer), 제목(stHeading), trace 텍스트(stText)가 여기 해당한다.
+   text_area·multiselect·selectbox·number_input 등 입력 위젯은 제외한다 —
+   자기 자신의 입력창/드롭다운 배경(테마별로 밝거나 어두움)을 따로 갖고
+   있어서, 강제로 밝게 고정하면 자기 배경과 안 맞아 오히려 안 보이게 된다. */
 .st-key-panel [data-testid="stWidgetLabel"],
 .st-key-panel [data-testid="stMarkdownContainer"],
 .st-key-panel [data-testid="stCaptionContainer"],
-.st-key-panel [data-testid="stHeading"] {
+.st-key-panel [data-testid="stHeading"],
+.st-key-panel [data-testid="stText"] {
     color: #f5f5f7;
 }
 /* 버그: 추천 실행 후 패널 콘텐츠(메시지+필터 검증 expander+trace 텍스트)가

@@ -194,6 +194,27 @@
     신규 테스트 추가). `require.md`(페르소나 시나리오 문서)는 이번 재설계
     이전 필터 체계(category·구/근처 자유텍스트) 기준으로 작성돼 있어
     최신화 필요 — 다음 세션 작업 후보.
+- **우측 패널 라이트/다크 테마 글자색 — 3단계 만에 정착.** 패널 배경(항상
+  어두운 반투명)은 고정인데 글자색은 브라우저 테마를 따라가서, 라이트 모드에서
+  어두운 기본 글자색 + 어두운 배경이 겹쳐 거의 안 보이던 문제를 고치는 과정에서
+  두 번의 회귀가 있었다.
+  1. 1차 수정: `.st-key-panel * { color: inherit }`로 패널 안 모든 자손에
+     밝은 색을 강제 → text_area/multiselect/selectbox 등 **자기 배경이 이미
+     있는 위젯**까지 밝은 글자로 덮여 "밝은 배경 + 밝은 글자"로 안 보이는
+     회귀 발생.
+  2. 2차 수정: 와일드카드를 걷어내고 `stWidgetLabel`/`stMarkdownContainer`/
+     `stCaptionContainer`/`stHeading` 등 라벨·캡션·제목만 콕 집어 타겟팅.
+     그런데 `.st-key-panel` 컨테이너 자체에는 여전히 `color: #f5f5f7`가
+     남아있어서, 자기 색을 안 갖는 `text_area`의 실제 `<textarea>` 요소(배경
+     투명, 자기 배경은 별도 wrapper가 가짐)까지 상속으로 계속 새어 들어가
+     타이핑한 글자가 안 보이는 회귀가 남아있었다(placeholder는 별도 스타일이라
+     멀쩡해 보여서 눈으로만 봐선 안 잡혔고, 직접 타이핑해봐야 재현됨).
+  3. 최종 수정: `.st-key-panel` 자체의 `color` 선언을 아예 제거하고, 밝은
+     색이 필요한 요소(라벨·캡션·제목·`stText`(trace 로그) — 전부 패널
+     배경 위에 직접 얹히는 순수 텍스트)만 명시적으로 타겟팅. 입력 위젯은
+     Streamlit 기본 배색(자기 배경과 이미 테마별로 짝지어짐)을 그대로 둔다.
+     Playwright로 라이트/다크 각각 실제 타이핑·제출·trace 로그까지 재현
+     확인, 전체 181개 테스트 통과.
 
 ## 파일 지도
 
@@ -592,10 +613,12 @@ mock 데이터 계획을 조정해야 한다.
      새로 받고 `/health`가 `mock_llm` 필드를 추가로 반환하게 됐다 — 배포된 API를
      쓰는 프론트가 있다면 하위호환 확인할 것(둘 다 기존 필드는 그대로 유지되는
      추가라 문제 없을 것으로 예상되지만, 실제 배포 후 확인 필요).
-4. **핵심 시나리오 30개 구성** — `QUTUMENT/nemotron-personas-korea-extended`
+4. **핵심 시나리오 30개 구성 — 완료.** `QUTUMENT/nemotron-personas-korea-extended`
    서울 중심 샘플을 기반으로 현실적인 질문 후보를 만들고, 현재 스키마 커버리지
    (`answerable`/`partial`/`not_answerable`)를 태깅한 뒤 실제 Solar API 대상으로 검증.
-   (자세한 방법론은 위 "페르소나 시나리오 설계 기준" 절 참고.)
+   `require.md`에 정리돼 있다(단, `require.md` 자체는 이후 필터 아키텍처 재설계
+   전 기준으로 쓰여 있어 최신화 필요 — 위 "require.md" 관련 메모 참고). 자세한
+   방법론은 위 "페르소나 시나리오 설계 기준" 절 참고.
 5. **LLMOps 운영 안정성 개선 — Langfuse 추적 적용 완료.** 이미 있던 재시도
    (`num_retries=2`)와 자체 가드레일(`intent_sanitizer.py`,
    `unsupported_requirements.py`)에 더해, Solar 호출 자체의 관측(Langfuse Tracing)을
