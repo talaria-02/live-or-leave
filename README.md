@@ -1,177 +1,107 @@
 # 살래말래 (Live or Leave)
 
-서울 행정동 424개 단위로, 사용자의 자연어 라이프스타일 선호를 받아 살기 좋은 동네를
-추천하는 서비스입니다. 자연어 해석·근거 설명은 LLM이, 정규화·스코어링·순위 계산은
-결정론적 백엔드가 맡습니다.
+## 1. 프로젝트 소개
+
+**살래말래**는 서울 행정동 424개 단위로, 사용자의 자연어 라이프스타일 선호를
+입력받아 살기 좋은 동네를 추천해주는 AI 서비스입니다.
 
 > "야근이 잦고 차가 없어서 지하철이 중요해. 밤에 안전한 동네였으면 좋겠어."
 >
 > → 이동·안전 가중치를 높게 파싱해 상위 3개 행정동을 추천하고, 실제 지표 수치를
 > 근거로 왜 그 순서인지 설명합니다.
 
-## 핵심 설계
+- **주요 사용자**: 서울에서 새로 거주지를 구하려는 1인 가구·직장인·학생 등, "어느
+  동네가 나에게 맞을지" 감으로만 판단하기 어려운 사람들.
+- **프로젝트를 만들게 된 배경**: 부동산 플랫폼 대부분은 매물 중심(가격·평수)
+  정보만 제공할 뿐, "이 동네가 내 생활 방식에 맞는가"를 라이프스타일 관점에서
+  비교해주지 않습니다. 또한 안전·편의·이동·환경 관련 공공데이터는 존재하지만
+  자치구 단위로만 뭉뚱그려 제공되는 경우가 많아, 실제 의사결정에 필요한 행정동
+  단위의 세밀한 비교가 어렵습니다.
+- **최종 결과물의 형태**: 자연어 입력 → 지도 위에 티어링(추천 정도별 색상 구분)된
+  424개 행정동을 시각화하는 웹 서비스(Streamlit 지도 UI)와, 이를 뒷받침하는
+  FastAPI 백엔드(SSE 스트리밍 API)로 구성됩니다.
 
-- **분석 단위는 행정동(424개), 자치구가 아닙니다.** 자치구 단위로는 "강남구"로
-  뭉뚱그려 대치동과 개포동을 구분하지 못합니다 (MAUP 문제).
-- **LLM은 입구·출구에만 관여합니다.** 자연어 해석(`parse_intent`)과 근거 설명
-  (`explain`)만 LLM이 하고, 정규화·스코어링·정렬은 전부 순수 함수(`scoring.py`)가
-  결정론적으로 계산합니다.
-- **LLM은 숫자를 만들지 않습니다.** 카테고리별 중요도는 4단계 라벨(매우중요/중요/
-  보통/관계없음)만 고르고, 라벨 → 가중치 변환은 코드가 고정값으로 수행합니다.
-- **데이터에 없는 걸 지어내지 않습니다.** 범죄율은 행정동 단위로 공개되지 않아
-  자치구 값을 상속받는데, 이 사실을 추천 설명에 각주로 명시합니다.
+---
 
-설계 배경과 전체 원칙은 [HANDOFF.md](HANDOFF.md)에 정리돼 있습니다.
+## 2. 문제 정의
 
-## 무엇을 하는가
+- **사용자가 겪는 불편함**: "강남구가 좋다"는 식의 자치구 단위 정보만으로는
+  같은 구 안에서도 확연히 다른 대치동과 개포동을 구분할 수 없습니다(MAUP —
+  Modifiable Areal Unit Problem). 게다가 안전·편의·이동·환경처럼 서로 다른
+  차원의 조건을 사람이 직접 따져가며 여러 동네를 비교하는 건 번거롭습니다.
+- **기존 방식의 한계**: 대부분의 부동산/지역정보 서비스는 매물 스펙 검색에
+  최적화돼 있고, "생활 방식과 맞는 동네"를 자연어로 물어보고 근거와 함께 추천받는
+  경험은 제공하지 않습니다. 또한 범죄율처럼 행정동 단위로 공개되지 않는 지표를
+  다룰 때, 이 사실을 숨기지 않고 사용자에게 투명하게 알려주는 서비스도 드뭅니다.
+- **왜 이 문제가 중요한지**: 거주지 선택은 삶의 질에 직접적인 영향을 미치는
+  고관여 의사결정입니다. 그런데도 이를 뒷받침할 정량적 근거를 개인이 직접 여러
+  공공데이터를 뒤져가며 비교하는 건 현실적으로 어렵습니다.
 
-사용자 문장 → 4개 핵심 카테고리(안전/편의/이동/환경) 가중치 산출 → 424개 행정동
-스코어링·순위 → 실제 지표 수치로 근거 설명.
+---
 
-"버거집", "헬스장"처럼 4개 카테고리 밖의 업종을 언급하면, 실제 상권업종 데이터에서
-해당 행정동의 업소 수를 조회해 점수에 반영하고, 없으면 없다고 솔직히 알려줍니다.
+## 3. 문제 해결
 
-자치구 선택(포함/제외)이나 특정 장소 근처(반경 직접 조절)로 범위를 좁히는 것도
-가능합니다 — 이건 자유 텍스트를 LLM이 해석하는 게 아니라, 사용자가 UI에서 직접
-지정하는 하드 필터입니다.
+- **핵심 아이디어**: "LLM은 해석과 설명만, 판단은 결정론적 계산이 담당한다."
+  자연어 해석(`parse_intent`)과 근거 설명(`explain`)만 LLM(Upstage Solar)이
+  맡고, 정규화·스코어링·순위 계산은 전부 순수 함수(`app/services/scoring.py`)가
+  결정론적으로 수행합니다. 같은 입력이면 항상 같은 순위가 나오고, LLM이 점수를
+  임의로 지어내는 일이 없습니다.
+- **AI/소프트웨어가 문제 해결에 사용된 방식**:
+  - 사용자의 자연어 문장 → 안전/편의/이동/환경 4개 핵심 카테고리에 대한
+    중요도(매우중요/중요/보통/관계없음)를 LLM이 라벨링 → 라벨→가중치 변환은
+    코드가 고정값으로 수행(LLM이 숫자를 직접 만들지 않음).
+  - "헬스장", "카페"처럼 4개 카테고리 밖의 업종을 언급하면 실제 상권업종
+    데이터(소상공인시장진흥공단)나 Kakao Local API에서 해당 행정동의 업소 수를
+    조회해 반영하고, 데이터가 없으면 없다고 솔직히 알려줍니다.
+  - 자치구 선택(포함/제외), 특정 장소 근처(반경 직접 조절) 같은 하드 필터는
+    LLM이 자연어에서 추측하지 않고, 사용자가 UI에서 직접 구조화된 형태로
+    지정합니다 — "선택 사항으로 적은 텍스트가 필수 조건으로 오인식"되는 부류의
+    버그를 구조적으로 방지하기 위한 설계입니다.
+  - 사용자 요청이 모호하면 추천을 억지로 만들어내지 않고 되물어서 조건을
+    구체화합니다.
+- **전체 동작 흐름**: 자연어 입력 + 구조화 필터 → (LLM) 의도 파싱 → (결정론적
+  백엔드) 424개 행정동 스코어링·필터링·z-score 기반 티어링 → (LLM) 상위 3개
+  행정동에 대한 근거 설명 생성 → 지도 위 시각화.
 
-## 프로젝트 구조
+---
 
-```
-main.py                  # FastAPI 컨트롤러 — GET /health, GET /recommend(SSE 스트리밍)
-app/
-  schemas/
-    domain.py       # DongRawMetrics, DongScores, Recommendation, 지표별 가공방식 각주
-    tools.py         # Importance, CategoryPreference, ParsedIntent, 도구 스키마
-  services/
-    scoring.py       # 결정론적 계산: 분위수 정규화·스코어링·순위 (LLM 없음, 핵심 로직)
-  agent/
-    solar_llm.py     # 프로덕션 기본 LLM. Upstage Solar API 어댑터 (LiteLLM 경유, .env의 UPSTAGE_API_KEY 사용)
-    mock_llm.py      # 규칙 기반 스텁 LLM (테스트 전용, RecommendationAgent(llm=MockLLM())로 주입)
-    tools.py         # ToolExecutor: 도구를 scoring 서비스에 위임
-    loop.py          # ReAct 흐름 오케스트레이터 (입구→도구→출구, 되묻기 1회)
-    factory.py       # main.py(FastAPI)와 streamlit_app.py가 공유하는 mock 판단·에이전트 생성
-    intent_sanitizer.py         # LLM 파싱 결과 후처리 가드 (배경정보로 업종 지어내기 방지, 모호하면 강제 되묻기)
-    unsupported_requirements.py # 현재 스키마로 검증 불가능한 요구(소음·학군·주차 등) 감지 → 설명에 한계로 명시
-  data/
-    csv_repository.py            # dong_metrics.csv 로더
-    facility_repository.py       # 임의 업종(상가업소) 조회, 프로세스 수명 동안 캐시
-    kakao_facility_repository.py # Kakao Local API — "이 장소 근처만 보기" 거리 필터, 기준 장소 후보 검색
-build_dong_metrics.py     # 원본 공공데이터 → dong_metrics.csv 생성 파이프라인
-build_dong_boundaries.py  # 원본 shapefile → dong_boundaries.geojson 생성 (지도 UI용)
-scripts/
-  sample_qutument_personas.py   # Nemotron-Personas-Korea에서 페르소나 표본 추출
-  build_persona_scenarios.py    # 표본 페르소나 → require.md용 시나리오(persona_scenarios_30.csv) 생성
-data/personas/            # 페르소나 표본·커버리지 산출물 (require.md 시나리오의 근거 데이터, 런타임 미사용)
-dong_metrics.csv          # 행정동 424개 지표 테이블 (커밋됨, 앱 실행에 바로 필요)
-dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 커밋됨)
-seoul_gu.geojson          # 서울 자치구 25개 경계 (자치구 하드필터 지도 표시용, 커밋됨)
-demo.py                   # 시나리오 데모 실행
-streamlit_app.py          # 지도 UI (자유 텍스트 선호 + 구조화 필터(자치구/이 장소 근처만 보기) 입력 → "동네 추천하기" 버튼 → 티어링 지도)
-tests/                    # pytest 181개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)
-```
+## 4. 핵심 기능
 
-## 실행 방법
+- 자연어 라이프스타일 선호 입력 → 안전/편의/이동/환경 4개 카테고리 가중치 자동 산출
+- 424개 서울 행정동 대상 결정론적 스코어링·순위 계산 (z-score 기반 티어링)
+- 임의 업종(헬스장, 카페, 편의점 등) 언급 시 실제 상권 데이터 기반 반영
+- 자치구 포함/제외, 특정 장소 근처(반경 직접 조절) 등 UI 기반 구조화 하드 필터
+- Kakao Local API 연동 — 기준 장소 후보 검색 및 직접 선택(오검색 방지)
+- 조건이 모호하면 자동으로 되묻는 대화형 흐름(clarify)
+- 추천 근거를 자연어로 설명(내부 가중치 수치 대신 이해하기 쉬운 문장으로 제공)
+- 지도 기반 시각화 UI(Streamlit) — 추천 정도별 색상 구분, 라이트/다크 테마 대응
+- FastAPI 기반 SSE 스트리밍 API + 실행 스크립트(`demo.py`)
+- Docker Compose 실행 구성 + GitHub Actions CI/CD를 통한 GCE VM 자동 배포
+- Langfuse 기반 LLM 호출 추적(선택), 181개 자동화 테스트로 회귀 방지
 
-```bash
-pip install -r requirements.txt
-python demo.py                # 시나리오 데모
-uvicorn main:app --reload     # FastAPI 서버 실행 (http://127.0.0.1:8000)
-python -m pytest tests/       # 전체 테스트
-```
+---
 
-서버 실행 후 SSE 스트리밍 확인:
+## 5. 데모 영상
 
-```bash
-curl -N --get "http://127.0.0.1:8000/recommend" \
-  --data-urlencode "text=야근이 잦고 차가 없어서 지하철이 중요해. 밤에 안전한 동네였으면 좋겠어."
-```
+- 데모 영상: (준비 중)
+- 배포 URL: http://34.47.104.133:8501 (지도 UI) / http://34.47.104.133:8000/health (API 헬스체크)
+- 추가 시연 자료: 로컬 실행 방법은 [HANDOFF.md](HANDOFF.md) "재현 방법" 절 참고
 
-지도 UI 실행:
+---
 
-```bash
-streamlit run streamlit_app.py                  # 기본값: 실제 Solar API (실제 시연용)
-USE_MOCK_LLM=1 streamlit run streamlit_app.py    # mock (레이아웃·색깔 등 빠른 반복 확인용)
-```
+## 6. 팀원 소개
 
-Docker Compose로 API와 지도 UI를 함께 실행:
+| 이름 | 역할 | GitHub |
+|---|---|---|
+| 정영준 | GCP(GCE) 인프라 구축 및 Docker Compose 배포, GitHub Actions CI/CD 파이프라인 운영, Nemotron-Personas-Korea 기반 30개 페르소나 시나리오 설계·검증(`require.md`), API 키/환경변수 연동 관리 | [@JeongYeongJun-eddie](https://github.com/JeongYeongJun-eddie) |
+| 이규석 | 백엔드 로직(ReAct 흐름·스코어링·필터 아키텍처) 구현, Streamlit 지도 UI(Frontend) 개발 | [@talaria-02](https://github.com/talaria-02) |
 
-```bash
-cp .env.example .env
-# .env에 UPSTAGE_API_KEY 입력
-docker compose up -d --build
-curl http://127.0.0.1:8000/health
-```
+---
 
-- API: `http://127.0.0.1:8000`
-- 지도 UI: `http://127.0.0.1:8501`
-- GCE 배포 절차는 [docs/deploy-gce.md](docs/deploy-gce.md)에 정리돼 있습니다.
+## 7. 참고자료 / 발표자료
 
-`dong_metrics.csv`는 이미 커밋돼 있어 위 명령만으로 바로 동작합니다. 원본 공공데이터
-(`dataset/`)는 용량이 커서(약 160MB) `.gitignore` 처리돼 있고, 재생성하려면 원본
-CSV들을 별도로 확보해 `python build_dong_metrics.py`를 실행해야 합니다.
-
-주의: 실제 Solar 경로에서 "헬스장", "카페" 같은 임의 업종을 해석하려면
-`dataset/소상공인시장진흥공단_상가(상권)정보_서울.csv`가 필요합니다. Docker 이미지에는
-원본 CSV를 넣지 않고, `docker-compose.yml`에서 VM의 `./dataset`을 `/app/dataset`으로
-마운트합니다.
-
-Python 3.9 이상이 필요합니다 (LiteLLM 의존성 때문).
-
-### Upstage Solar API 키 설정 (필수)
-
-`RecommendationAgent`(및 `demo.py`)는 기본적으로 실제 Upstage Solar API를
-사용합니다. 프로젝트 루트에 `.env` 파일을 만들고 아래처럼 키를 넣어야 동작합니다
-(`.env`는 `.gitignore`에 등록돼 있어 커밋되지 않습니다). 팀원마다 각자 자신의
-키를 넣으면 코드 변경 없이 동일하게 동작합니다.
-
-```
-UPSTAGE_API_KEY=본인의_Upstage_API_키
-```
-
-키 없이 결정론적으로 개발·테스트하고 싶으면 `RecommendationAgent(llm=MockLLM())`처럼
-명시적으로 mock을 주입하세요 (`tests/`가 이 방식을 씁니다 — 그래서 `pytest`는
-키 없이도 항상 빠르게 통과합니다).
-
-### Langfuse 관측 (선택, 운영 안정성)
-
-Solar API 호출(입력·출력·지연시간·비용)을 추적하고 싶으면 `.env`에 아래 3개를
-채우세요. 비워두면 `solar_llm.py`가 조용히 무시하고 평소처럼 동작합니다.
-
-```
-LANGFUSE_PUBLIC_KEY=본인의_Langfuse_Public_Key
-LANGFUSE_SECRET_KEY=본인의_Langfuse_Secret_Key
-LANGFUSE_HOST=https://cloud.langfuse.com
-```
-
-키는 [cloud.langfuse.com](https://cloud.langfuse.com) 가입 → 프로젝트 생성 →
-Settings → API Keys에서 발급받습니다. 채워두면 LiteLLM이 각 Solar 호출을 자동으로
-Langfuse Tracing 대시보드에 전송합니다(코드 추가 수정 불필요).
-
-## 지금 상태 / 다음 할 일
-
-- 완료: 데이터 파이프라인, 스코어링(지도 색상 구분은 z-score 기반 — 필터로
-  결과가 적어져도 상위권이 억지로 몰리지 않는다), ReAct 흐름(하드필터가
-  있어도 선호가 모호하면 항상 되묻는다), 임의 업종(버거·헬스장 등) 조회,
-  필수조건 하드필터(`required_filters` — 거리(근처)/행정구역 2종. 자치구
-  선택하기·이 장소 근처만 보기(반경 직접 조절)로 UI에서 직접 지정하며
-  LLM은 관여하지 않는다. Kakao Local API 연동, 기준 장소는 후보 여러 개
-  중 직접 선택, 검색 범위는 서울 인접 수도권까지 포함), 실제 Upstage Solar
-  API 연동(`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러
-  (`main.py`), 재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`,
-  위성/다크 풀스크린 지도, 상위 3개 추천 지점 표시, 라이트/다크 브라우저
-  테마 모두 대응), Docker Compose 실행 구성, GitHub Actions CI/CD(GCE VM
-  자동 배포), Langfuse 기반 LLM 호출 추적, Nemotron-Personas-Korea 기반
-  핵심 시나리오 30개.
-- 다음: 반경 적절성 검증, `CompareTool` 버그 수정, 실패 케이스 처리 고도화 등
-  자세한 항목은 [HANDOFF.md](HANDOFF.md)의 "다음 할 일" 참고.
-
-자세한 트러블슈팅·재현 방법·설계 원칙은 [HANDOFF.md](HANDOFF.md)를 참고하세요.
-
-## 데이터 출처
-
-서울 열린데이터광장 공공데이터 — 상권분석서비스(행정동 경계), 생활인구, 5대 범죄
-발생현황, CCTV 설치현황, 버스정류소 위치, 도시공원정보, 역사마스터 정보, 소상공인
-상가업소 정보. 지표별 가공 방식(반경 1km 밀도화, 구 상속, 거리감쇠 등)은
-[HANDOFF.md](HANDOFF.md)와 `app/schemas/domain.py`의 `CATEGORY_CAVEATS`를
-참고하세요.
+- 발표자료: (추가 예정)
+- 기획서: (추가 예정)
+- 참고한 문서: [HANDOFF.md](HANDOFF.md)(설계 원칙·페르소나 데이터 구축 방법론·알려진 한계·재현 방법), [require.md](require.md)(페르소나 시나리오 30개), [docs/deploy-gce.md](docs/deploy-gce.md)(GCE 배포 절차)
+- 참고한 오픈소스/데이터: 서울 열린데이터광장(상권분석서비스, 생활인구, 5대 범죄 발생현황, CCTV, 버스정류소, 도시공원, 소상공인 상가업소 정보), `QUTUMENT/nemotron-personas-korea-extended`(페르소나 데이터셋)
+- 기타 자료: Upstage Solar API, Kakao Local API
