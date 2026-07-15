@@ -78,7 +78,19 @@ class RecommendationAgent:
             required_filters=required_filters or [],
             top_n=top_n,
         )
-        result = self.tools.recommend(tool_args)
+        # stream()은 이 구간 실패를 이미 SSE error 이벤트로 우아하게 처리하지만,
+        # run()(Streamlit이 씀)은 이 보호막이 없어서 Kakao 호출 한도 초과 같은
+        # 일시적 도구 실패가 그대로 위로 튀어 Streamlit 스크립트 전체가 죽었다.
+        # data 없이도 UI가 이미 처리할 줄 아는 kind="clarify" 경로로 우아하게 종료한다.
+        try:
+            result = self.tools.recommend(tool_args)
+        except Exception as e:
+            trace.append(f"[step {steps}] tool:recommend → 실패 ({e!r})")
+            return AgentResult(
+                kind="clarify",
+                message="일시적으로 조건을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                trace=trace,
+            )
         top = [r["gu"] for r in result["recommendations"][:3]]
         trace.append(f"[step {steps}] tool:recommend → "
                      f"required_filters(구조화 입력)="
@@ -88,8 +100,14 @@ class RecommendationAgent:
         # --- 종합: 출구 LLM 근거 설명 (항상 상위 3개만) ---
         steps += 1
         explain_input = {**result, "recommendations": result["recommendations"][:3]}
-        message = self.llm.explain(user_text, explain_input)
-        trace.append(f"[step {steps}] explain → 근거 설명 생성 (상위 {len(top)}건)")
+        # 여기서 실패해도 스코어링 결과(data)는 이미 유효하다 — 지도는 그대로
+        # 보여주고 문구만 안내문으로 대체한다(추천 결과 자체를 버리지 않는다).
+        try:
+            message = self.llm.explain(user_text, explain_input)
+            trace.append(f"[step {steps}] explain → 근거 설명 생성 (상위 {len(top)}건)")
+        except Exception as e:
+            trace.append(f"[step {steps}] explain → 실패, 안내 문구로 대체 ({e!r})")
+            message = "추천 동네는 찾았지만 설명 문구 생성에 실패했습니다. 아래 지도를 참고해주세요."
 
         return AgentResult(
             kind="recommendation", message=message, trace=trace, data=result

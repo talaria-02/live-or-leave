@@ -112,3 +112,36 @@ def test_stream_yields_error_event_instead_of_raising():
     agent = RecommendationAgent(llm=_BrokenLLM())
     events = list(agent.stream("아무 문장"))
     assert events == [{"type": "error", "message": "일부러 실패시킴"}]
+
+
+# ---------- run()의 도구/설명 실패 처리 (Streamlit이 죽지 않아야 함) ----------
+
+def test_run_returns_clarify_instead_of_raising_when_tool_recommend_fails():
+    """Kakao 호출 한도 초과 같은 일시적 도구 실패가 나도 run()은 예외를 던지지
+    않고 kind="clarify"로 우아하게 종료해야 한다 — streamlit_app.py는 이미
+    이 kind를 처리할 줄 알아서 앱이 죽지 않는다."""
+    agent = _agent()
+    agent.tools.recommend = lambda args: (_ for _ in ()).throw(RuntimeError("호출 한도 초과"))
+
+    result = agent.run("안전하고 조용한 동네가 좋아요")
+
+    assert result.kind == "clarify"
+    assert result.data is None
+    assert result.message
+    assert "tool:recommend" in " ".join(result.trace)
+
+
+def test_run_keeps_recommendation_data_when_explain_fails():
+    """explain 단계는 스코어링이 이미 끝난 뒤라 실패해도 data(지도용 추천 결과)는
+    그대로 유지하고, 문구만 안내문으로 대체해야 한다 — 추천 결과 자체를 버리지 않는다."""
+    class _ExplainFailsLLM(MockLLM):
+        def explain(self, user_text, result):
+            raise RuntimeError("설명 생성 실패")
+
+    agent = RecommendationAgent(llm=_ExplainFailsLLM())
+    result = agent.run("안전하고 조용한 동네가 좋아요")
+
+    assert result.kind == "recommendation"
+    assert result.data is not None
+    assert len(result.data["recommendations"]) == 3
+    assert result.message  # 안내문으로 대체됐지만 비어있지는 않음
