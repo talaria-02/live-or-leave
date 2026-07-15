@@ -31,6 +31,10 @@
 "버거집", "헬스장"처럼 4개 카테고리 밖의 업종을 언급하면, 실제 상권업종 데이터에서
 해당 행정동의 업소 수를 조회해 점수에 반영하고, 없으면 없다고 솔직히 알려줍니다.
 
+자치구 선택(포함/제외)이나 특정 장소 근처(반경 직접 조절)로 범위를 좁히는 것도
+가능합니다 — 이건 자유 텍스트를 LLM이 해석하는 게 아니라, 사용자가 UI에서 직접
+지정하는 하드 필터입니다.
+
 ## 프로젝트 구조
 
 ```
@@ -47,15 +51,18 @@ app/
     tools.py         # ToolExecutor: 도구를 scoring 서비스에 위임
     loop.py          # ReAct 흐름 오케스트레이터 (입구→도구→출구, 되묻기 1회)
     factory.py       # main.py(FastAPI)와 streamlit_app.py가 공유하는 mock 판단·에이전트 생성
+    intent_sanitizer.py         # LLM 파싱 결과 후처리 가드 (배경정보로 업종 지어내기 방지, 모호하면 강제 되묻기)
+    unsupported_requirements.py # 현재 스키마로 검증 불가능한 요구(소음·학군·주차 등) 감지 → 설명에 한계로 명시
   data/
-    csv_repository.py       # dong_metrics.csv 로더
-    facility_repository.py  # 임의 업종(상가업소) 조회, 프로세스 수명 동안 캐시
+    csv_repository.py            # dong_metrics.csv 로더
+    facility_repository.py       # 임의 업종(상가업소) 조회, 프로세스 수명 동안 캐시
+    kakao_facility_repository.py # Kakao Local API — "이 장소 근처만 보기" 거리 필터, 기준 장소 후보 검색
 build_dong_metrics.py     # 원본 공공데이터 → dong_metrics.csv 생성 파이프라인
 build_dong_boundaries.py  # 원본 shapefile → dong_boundaries.geojson 생성 (지도 UI용)
 dong_metrics.csv          # 행정동 424개 지표 테이블 (커밋됨, 앱 실행에 바로 필요)
 dong_boundaries.geojson   # 행정동 425개 경계 (지도 UI용, 커밋됨)
 demo.py                   # 시나리오 데모 실행
-streamlit_app.py          # 지도 UI (자유 텍스트 선호 + 구조화 필터(자치구/기준장소) 입력 → "동네 추천하기" 버튼 → 티어링 지도)
+streamlit_app.py          # 지도 UI (자유 텍스트 선호 + 구조화 필터(자치구/이 장소 근처만 보기) 입력 → "동네 추천하기" 버튼 → 티어링 지도)
 tests/                    # pytest 181개 (알고리즘 단위 테스트 + 실데이터 시나리오 검증 + API 테스트)
 ```
 
@@ -138,14 +145,19 @@ Langfuse Tracing 대시보드에 전송합니다(코드 추가 수정 불필요)
 
 ## 지금 상태 / 다음 할 일
 
-- 완료: 데이터 파이프라인, 스코어링, ReAct 흐름, 임의 업종(버거·헬스장 등) 조회,
-  필수조건 하드필터(`required_filters` — 거리(근처)/행정구역 2종. 구·기준
-  장소는 UI 구조화 입력에서 직접 만들어지고 LLM은 관여하지 않는다. Kakao
-  Local API 연동, 기준 장소는 후보 여러 개 중 직접 선택), 실제 Upstage Solar API 연동(`solar_llm.py`, LiteLLM
-  경유), SSE 스트리밍 + FastAPI 컨트롤러(`main.py`), 재시도를 포함한 실패 처리,
-  Streamlit 지도 UI(`streamlit_app.py`, 위성/다크 풀스크린 지도), Docker Compose
-  실행 구성, GitHub Actions CI/CD(GCE VM 자동 배포), Langfuse 기반 LLM 호출 추적,
-  Nemotron-Personas-Korea 기반 핵심 시나리오 30개.
+- 완료: 데이터 파이프라인, 스코어링(지도 색상 구분은 z-score 기반 — 필터로
+  결과가 적어져도 상위권이 억지로 몰리지 않는다), ReAct 흐름(하드필터가
+  있어도 선호가 모호하면 항상 되묻는다), 임의 업종(버거·헬스장 등) 조회,
+  필수조건 하드필터(`required_filters` — 거리(근처)/행정구역 2종. 자치구
+  선택하기·이 장소 근처만 보기(반경 직접 조절)로 UI에서 직접 지정하며
+  LLM은 관여하지 않는다. Kakao Local API 연동, 기준 장소는 후보 여러 개
+  중 직접 선택, 검색 범위는 서울 인접 수도권까지 포함), 실제 Upstage Solar
+  API 연동(`solar_llm.py`, LiteLLM 경유), SSE 스트리밍 + FastAPI 컨트롤러
+  (`main.py`), 재시도를 포함한 실패 처리, Streamlit 지도 UI(`streamlit_app.py`,
+  위성/다크 풀스크린 지도, 상위 3개 추천 지점 표시, 라이트/다크 브라우저
+  테마 모두 대응), Docker Compose 실행 구성, GitHub Actions CI/CD(GCE VM
+  자동 배포), Langfuse 기반 LLM 호출 추적, Nemotron-Personas-Korea 기반
+  핵심 시나리오 30개.
 - 다음: 반경 적절성 검증, `CompareTool` 버그 수정, 실패 케이스 처리 고도화 등
   자세한 항목은 [HANDOFF.md](HANDOFF.md)의 "다음 할 일" 참고.
 
