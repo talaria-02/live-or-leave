@@ -6,6 +6,9 @@ space_info/
 # 페르소나 생성 스크립트용 중간 산출물 (런타임 미사용, scripts/에서 재생성 가능)
 data/personas/
 
+# Kakao Local API 응답 디스크 캐시 (TTL 7일, 런타임에 자동 생성)
+.kakao_cache/
+
 # 빌드 산출물 dong_metrics.csv, dong_boundaries.geojson은 예외로 커밋한다.
 # 원본(dataset/, space_info/)이 없어도 앱·지도가 바로 돌아가야 하고(HANDOFF.md 참고),
 # 파일 자체도 각각 32KB/4.9MB로 크지 않기 때문.

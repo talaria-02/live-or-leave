@@ -34,7 +34,10 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 _ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_GEOJSON = _ROOT / "dong_boundaries.geojson"
-DEFAULT_CACHE_DIR = _ROOT / "dataset" / "kakao_cache"
+
+# dataset/은 Docker Compose에서 읽기 전용(:ro)으로 마운트되므로, 캐시는 그 아래가
+# 아니라 프로젝트 루트(컨테이너 자체 쓰기 가능 영역)에 둔다.
+DEFAULT_CACHE_DIR = _ROOT / ".kakao_cache"
 
 KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
