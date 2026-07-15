@@ -441,8 +441,21 @@ FULLSCREEN_CSS = """
        항상 밝게 고정한다. */
     color: #f5f5f7;
 }
-.st-key-panel * {
-    color: inherit;
+/* 위 색은 "패널 배경(항상 어두움) 위에 직접 얹히는 순수 텍스트"에만 강제
+   적용한다 — 위젯 라벨(stWidgetLabel), 본문/캡션(stMarkdownContainer/
+   stCaptionContainer), 제목(stHeading)이 여기 해당한다.
+   text_area·multiselect·selectbox·number_input 등은 제외한다 — 이런
+   위젯은 패널이 아니라 자기 자신의 입력창/드롭다운 배경(테마별로 밝거나
+   어두움)을 따로 갖고 있어서, 위 색을 거기까지 강제하면 "밝은 배경 +
+   밝은 글자"처럼 자기 배경과 안 맞아 오히려 안 보이게 된다(직접 재현해
+   확인함 — 처음엔 `.st-key-panel *`로 전부 강제했다가 입력창 글자가
+   안 보이는 회귀가 생겼다). 이 위젯들은 Streamlit 기본 글자색(테마에 맞게
+   자기 배경과 이미 짝지어져 있음)을 그대로 두는 게 맞다. */
+.st-key-panel [data-testid="stWidgetLabel"],
+.st-key-panel [data-testid="stMarkdownContainer"],
+.st-key-panel [data-testid="stCaptionContainer"],
+.st-key-panel [data-testid="stHeading"] {
+    color: #f5f5f7;
 }
 /* 버그: 추천 실행 후 패널 콘텐츠(메시지+필터 검증 expander+trace 텍스트)가
    늘어나 100vh를 넘으면, 브라우저가 스크롤 대신 일부 위젯을 찌그러뜨려
